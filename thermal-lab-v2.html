@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Thermal Lab – 3D thermal & terrain visualiser</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#9ec5e8;font:12px system-ui,sans-serif}
+canvas{display:block}
+#ui{position:absolute;top:8px;left:8px;width:230px;max-height:calc(100% - 16px);overflow:auto;background:rgba(15,20,30,.82);color:#e8eef5;padding:10px;border-radius:8px}
+#ui label{display:block;margin-top:6px}#ui input[type=range]{width:100%}
+#ui input,#ui select,#ui button{width:100%;box-sizing:border-box;margin-top:2px;padding:3px}
+#ui .r{display:flex;gap:4px}#ui h3{margin:8px 0 2px;font-size:12px;color:#ffc46b}
+#hud{position:absolute;right:8px;top:8px;background:rgba(15,20,30,.82);color:#e8eef5;padding:8px 10px;border-radius:8px;white-space:pre;font:11px monospace}
+#st{position:absolute;bottom:6px;left:8px;color:#123;font-size:11px}
+#leg{position:absolute;right:8px;bottom:8px;color:#fff;background:rgba(15,20,30,.82);padding:6px 8px;border-radius:8px;font-size:11px}
+#leg i{display:inline-block;width:90px;height:8px;background:linear-gradient(90deg,#0066ff,#e6e6e6,#ff3300);vertical-align:middle}
+</style></head><body>
+<div id="ui">
+<b>Thermal Lab</b>
+<h3>Zone (open data)</h3>
+<div class="r"><input id="lat" value="45.3125" title="lat"><input id="lon" value="5.8967" title="lon"></div>
+<label>Size <select id="sz"><option>2</option><option selected>4</option><option>6</option><option>8</option><option>16</option></select> km</label>
+<label>Imagery <select id="src"><option value="esri">Esri World Imagery</option><option value="eox">Sentinel-2 cloudless (EOX)</option></select></label>
+<button id="go">Load terrain</button>
+<h3>Environment</h3><div id="sl"></div>
+<h3>Display</h3>
+<select id="mode"><option value="0">Aerial photo + sun shading</option><option value="1">Sticky surface heat pool (B / critical)</option><option value="2">Ground heat flux</option><option value="3">Albedo</option></select>
+<label><input type="checkbox" id="pt" checked style="width:auto"> Air tracers</label>
+</div>
+<div id="hud"></div><div id="leg">tracer vertical speed: sink <i></i> lift</div><div id="st"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id), N=161, MAXP=50000;
+const P={wspd:5,wdir:270,sunel:50,sunaz:180,clear:.9,exag:1.3,npart:7000,tscale:8};
+const SL=[['wspd','Wind speed (m/s)',0,20,5,.5],['wdir','Wind from (°)',0,359,270,1],['sunel','Sun elevation (°)',0,80,50,1],['sunaz','Sun azimuth (°)',0,359,180,1],['clear','Clear sky / dry ground',.2,1,.9,.05],['exag','Vertical exaggeration',1,3,1.3,.1],['npart','Tracer count',1000,MAXP,7000,500],['tscale','Time speed ×',1,20,8,1]];
+SL.forEach(([k,l,mn,mx,v,s])=>{const d=document.createElement('div');d.innerHTML=`<label>${l}: <b id="v_${k}">${v}</b></label><input type="range" id="${k}" min="${mn}" max="${mx}" step="${s}" value="${v}">`;$('sl').appendChild(d);d.querySelector('input').oninput=e=>{P[k]=+e.target.value;$('v_'+k).textContent=P[k];onParam(k)}});
+const terr=(z,x,y)=>`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+const SRC={esri:{max:17,url:(z,x,y)=>`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`},
+ eox:{max:13,url:(z,x,y)=>`https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2021_3857/default/g/${z}/${y}/${x}.jpg`}};
+const st=t=>$('st').textContent=t;
+
+// ---------- three.js setup ----------
+const R=new THREE.WebGLRenderer({antialias:true});R.setSize(innerWidth,innerHeight);R.setPixelRatio(devicePixelRatio);document.body.prepend(R.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x9ec5e8);
+const cam=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,10,200000);
+const O={t:new THREE.Vector3(),d:5000,th:.6,ph:1.0};
+function updCam(){cam.position.set(O.t.x+O.d*Math.sin(O.ph)*Math.sin(O.th),O.t.y+O.d*Math.cos(O.ph),O.t.z+O.d*Math.sin(O.ph)*Math.cos(O.th));cam.lookAt(O.t)}
+addEventListener('resize',()=>{R.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+let drag=null;const cv=R.domElement;
+cv.oncontextmenu=e=>e.preventDefault();
+cv.onpointerdown=e=>{drag={x:e.clientX,y:e.clientY,pan:e.button>0||e.shiftKey};cv.setPointerCapture(e.pointerId)};
+cv.onpointerup=()=>drag=null;
+cv.onpointermove=e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
+ if(drag.pan){const k=O.d*.0012,fx=-Math.sin(O.th),fz=-Math.cos(O.th),rx=Math.cos(O.th),rz=-Math.sin(O.th);O.t.x+=fx*dy*k-rx*dx*k;O.t.z+=fz*dy*k-rz*dx*k}
+ else{O.th-=dx*.006;O.ph=Math.min(1.55,Math.max(.05,O.ph-dy*.006))}};
+cv.onwheel=e=>{e.preventDefault();O.d=Math.min(60000,Math.max(100,O.d*Math.exp(e.deltaY*.001)))};
+const sunM=new THREE.Mesh(new THREE.SphereGeometry(1,16,12),new THREE.MeshBasicMaterial({color:0xffdd44}));scene.add(sunM);
+const arrow=new THREE.ArrowHelper(new THREE.Vector3(1,0,0),new THREE.Vector3(),500,0x1144ff,100,60);scene.add(arrow);
+const pg=new THREE.BufferGeometry(),ppos=new Float32Array(MAXP*3),pcol=new Float32Array(MAXP*3);
+pg.setAttribute('position',new THREE.BufferAttribute(ppos,3));pg.setAttribute('color',new THREE.BufferAttribute(pcol,3));
+const pts=new THREE.Points(pg,new THREE.PointsMaterial({size:3,sizeAttenuation:false,vertexColors:true,transparent:true,opacity:.85,depthWrite:false}));pts.frustumCulled=false;scene.add(pts);
+const tc=document.createElement('canvas');tc.width=tc.height=1024;const tx=tc.getContext('2d');const tex=new THREE.CanvasTexture(tc);tex.anisotropy=8;
+let mesh=null,G=null;
+
+// ---------- data loading ----------
+async function mosaic(urlFn,z,lat,lon,half){
+ const n=256*2**z,a=lat*Math.PI/180,px=(lon+180)/360*n,py=(1-Math.log(Math.tan(a)+1/Math.cos(a))/Math.PI)/2*n,hp=half/(156543.03*Math.cos(a)/2**z);
+ const x0=px-hp,y0=py-hp,tx0=Math.floor(x0/256),ty0=Math.floor(y0/256),tx1=Math.floor((px+hp)/256),ty1=Math.floor((py+hp)/256);
+ const c=document.createElement('canvas');c.width=(tx1-tx0+1)*256;c.height=(ty1-ty0+1)*256;const g=c.getContext('2d',{willReadFrequently:true});
+ let ok=0;const jobs=[];
+ for(let ty=ty0;ty<=ty1;ty++)for(let tx=tx0;tx<=tx1;tx++)jobs.push(new Promise(r=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>{g.drawImage(im,(tx-tx0)*256,(ty-ty0)*256);ok++;r()};im.onerror=r;im.src=urlFn(z,tx,ty)}));
+ await Promise.all(jobs);return{c,g,ox:x0-tx0*256,oy:y0-ty0*256,w:2*hp,ok,tot:jobs.length};
+}
+async function load(){
+ const lat=+$('lat').value,lon=+$('lon').value,size=+$('sz').value,half=size*500,cell=size*1000/(N-1),co=Math.cos(lat*Math.PI/180),src=SRC[$('src').value];
+ const ze=Math.min(14,Math.max(8,Math.ceil(Math.log2(156543*co/cell))));let zi=Math.min(src.max,ze+2);
+ const cnt=z=>(Math.ceil(2*half/(156543*co/2**z)/256)+1)**2;while(zi>8&&cnt(zi)>30)zi--;
+ st('Downloading elevation + imagery tiles…');
+ const [E,I]=await Promise.all([mosaic(terr,ze,lat,lon,half),mosaic(src.url,zi,lat,lon,half)]);
+ const h=new Float32Array(N*N);
+ if(E.ok===E.tot){
+  const W=E.c.width,d=E.g.getImageData(0,0,W,E.c.height).data,e=(x,y)=>{const o=(y*W+x)*4;return d[o]*256+d[o+1]+d[o+2]/256-32768};
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){const fx=Math.min(W-2,E.ox+i/(N-1)*E.w),fy=Math.min(E.c.height-2,E.oy+j/(N-1)*E.w),x=fx|0,y=fy|0,u=fx-x,v=fy-y;
+   h[j*N+i]=(e(x,y)*(1-u)+e(x+1,y)*u)*(1-v)+(e(x,y+1)*(1-u)+e(x+1,y+1)*u)*v}
+  st('Elevation OK ('+E.tot+' tiles, z'+ze+'). Imagery '+I.ok+'/'+I.tot+' tiles z'+zi+'.');
+ }else{for(let j=0;j<N;j++)for(let i=0;i<N;i++)h[j*N+i]=900+250*Math.sin(i/22)*Math.cos(j/30)+400*Math.exp(-((i-110)**2+(j-60)**2)/1500);
+  st('⚠ Elevation download failed (offline / blocked?) – showing synthetic terrain.');}
+ const ic=document.createElement('canvas');ic.width=ic.height=1024;const ig=ic.getContext('2d');ig.fillStyle='#777';ig.fillRect(0,0,1024,1024);
+ if(I.ok)ig.drawImage(I.c,I.ox,I.oy,I.w,I.w,0,0,1024,1024);
+ const sc=document.createElement('canvas');sc.width=sc.height=N;const sg=sc.getContext('2d');sg.drawImage(ic,0,0,N,N);
+ let px;try{px=sg.getImageData(0,0,N,N).data}catch(e){px=new Uint8ClampedArray(N*N*4).fill(120);st('Imagery canvas tainted: default albedo used.')}
+ const alb=new Float32Array(N*N),fs=new Float32Array(N*N);
+ for(let k=0;k<N*N;k++){const r=px[k*4],g=px[k*4+1],b=px[k*4+2],L=(.3*r+.59*g+.11*b)/255;
+  const veg=g>r*1.03&&g>b*1.05,wat=b>r&&b>g*.95&&L<.35;
+  alb[k]=wat?.06:Math.min(.8,Math.max(.05,.04+.5*Math.pow(L,1.3)));
+  fs[k]=wat?.03:veg?.30:.55}   // fraction of net radiation going to sensible heat
+ const gx=new Float32Array(N*N),gz=new Float32Array(N*N);
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){const a=Math.max(0,i-1),b=Math.min(N-1,i+1),c=Math.max(0,j-1),d=Math.min(N-1,j+1);
+  gx[j*N+i]=(h[j*N+b]-h[j*N+a])/((b-a)*cell);gz[j*N+i]=(h[d*N+i]-h[c*N+i])/((d-c)*cell)}
+ G={N,size,S:size*1000,cell,h,alb,fs,gx,gz,H:new Float32Array(N*N),Hs:new Float32Array(N*N),L:new Float32Array(N*N),cum:new Float32Array(N*N),ic,ac:albCanvas(alb),zi:0,Hm:1,Hmax:1};
+ if(mesh){scene.remove(mesh);mesh.geometry.dispose()}
+ const geo=new THREE.PlaneGeometry(size*1000,size*1000,N-1,N-1);geo.rotateX(-Math.PI/2);
+ const pa=geo.attributes.position;for(let k=0;k<N*N;k++)pa.setY(k,h[k]);geo.computeVertexNormals();
+ mesh=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({map:tex}));mesh.scale.y=P.exag;scene.add(mesh);
+ let m=0;for(const v of h)m+=v;m/=h.length;G.mean=m;O.t.set(0,m*P.exag,0);O.d=size*1000*.9;
+ compute();st('Spinning up 3D wind field…');await new Promise(r=>setTimeout(r,40));initSolver();for(let p=0;p<MAXP;p++)spawn(p,true);placeMarkers();redraw();st('Ready.');
+}
+function albCanvas(a){const c=document.createElement('canvas');c.width=c.height=N;const g=c.getContext('2d'),d=g.createImageData(N,N);
+ for(let k=0;k<N*N;k++){const v=Math.min(255,a[k]*400);d.data.set([v,v,v,255],k*4)}g.putImageData(d,0,0);return c}
+
+// ---------- 3D flow solver (coarse CFD: advection + pressure projection on voxel terrain) ----------
+const NX=40,NZ=24,NXY=NX*NX,NC=NXY*NZ,F=()=>new Float32Array(NC);
+const U=F(),V=F(),W=F(),T=F(),Pp=F(),Dv=F(),U2=F(),V2=F(),W2=F(),T2=F(),S=new Uint8Array(NC),low=new Int32Array(NXY),hcol=new Float32Array(NXY);
+let zmin,ztop,dx,dz,maxW=0,ixs=new Int32Array(8),wts=new Float32Array(8);
+const amb=z=>Math.min(1.4,Math.pow(Math.max(10,z-zmin)/500,.14));
+const envT=z=>Math.max(0,z-(G.mean+G.zi))*.006;   // stable layer (inversion) above the convective boundary layer top
+function initSolver(){
+ const Sm=G.S;dx=Sm/NX;let mn=1e9,mx=-1e9;for(const v of G.h){mn=Math.min(mn,v);mx=Math.max(mx,v)}
+ zmin=mn-30;ztop=Math.max(mx,G.mean+1850)+500;dz=(ztop-zmin)/NZ;
+ for(let j=0;j<NX;j++)for(let i=0;i<NX;i++){const c=j*NX+i;hcol[c]=bil(G.h,((i+.5)/NX-.5)*Sm,((j+.5)/NX-.5)*Sm);let k=0;while(k<NZ-1&&zmin+(k+.5)*dz<hcol[c])k++;low[c]=k;for(let q=0;q<NZ;q++)S[q*NXY+c]=q<k?1:0}
+ const[wx,wz]=wind();Pp.fill(0);W.fill(0);
+ for(let k=0;k<NZ;k++){const z=zmin+(k+.5)*dz;for(let c=0;c<NXY;c++){const id=k*NXY+c;U[id]=S[id]?0:wx*amb(z);V[id]=S[id]?0:wz*amb(z);T[id]=envT(z)}}
+ for(let s=0;s<25;s++){project(30);}
+ G.pc=new Int32Array(N*N);for(let j=0;j<N;j++)for(let i=0;i<N;i++)G.pc[j*N+i]=((j*NX/N)|0)*NX+((i*NX/N)|0);
+ G.B=new Float32Array(N*N);G.B2=new Float32Array(N*N);G.Bc=new Float32Array(N*N).fill(100);G.rnd=new Float32Array(N*N).map(()=>.8+Math.random()*.4);
+ G.cvx=(()=>{const b=blur(G.h,4),o=new Float32Array(N*N);for(let k=0;k<N*N;k++)o[k]=Math.min(1,Math.max(0,(G.h[k]-b[k])/30));return o})();
+ const n2=N*N;G.sl=new Float32Array(n2);G.ux0=new Float32Array(n2);G.uz0=new Float32Array(n2);G.bc0=new Float32Array(n2);
+ for(let k=0;k<n2;k++){const sl=Math.sqrt(G.gx[k]**2+G.gz[k]**2),st=Math.min(1,Math.max(0,(sl-.08)/.37));G.sl[k]=sl;if(sl>1e-4){G.ux0[k]=G.gx[k]/sl;G.uz0[k]=G.gz[k]/sl}
+  G.bc0[k]=120*(.75+1.6*st)*(1-.6*G.cvx[k])*G.rnd[k]}
+ for(let k=0;k<n2;k++)G.B[k]=G.H[k]>0?Math.random()*70:0}
+const OFF=[0,1,NX,NX+1,NXY,NXY+1,NXY+NX,NXY+NX+1],cl=(v,m)=>v<0?0:v>m?m:v;
+function advect(dt){
+ const kx=dt/dx,kz=dt/dz;
+ for(let k=0;k<NZ;k++)for(let j=0;j<NX;j++)for(let i=0;i<NX;i++){const id=(k*NX+j)*NX+i;
+  if(S[id]){U2[id]=V2[id]=W2[id]=T2[id]=0;continue}
+  const x=cl(i-U[id]*kx,NX-1.001),y=cl(j-V[id]*kx,NX-1.001),z=cl(k-W[id]*kz,NZ-1.001);
+  const i0=x|0,j0=y|0,k0=z|0,fx=x-i0,fy=y-j0,fz=z-k0,b=(k0*NX+j0)*NX+i0,gx=1-fx,gy=1-fy,gz=1-fz;
+  let u=0,v=0,w=0,t=0,ts=0;
+  for(let c=0;c<8;c++){const q=b+OFF[c],wt=((c&1)?fx:gx)*((c&2)?fy:gy)*((c&4)?fz:gz);
+   if(S[q])ts+=wt;else{u+=wt*U[q];v+=wt*V[q];w+=wt*W[q];t+=wt*T[q]}}
+  U2[id]=u;V2[id]=v;W2[id]=w;T2[id]=t+ts*T[id]}
+ U.set(U2);V.set(V2);W.set(W2);T.set(T2)}
+function project(it){
+ for(let k=0;k<NZ;k++)for(let j=0;j<NX;j++)for(let i=0;i<NX;i++){const id=(k*NX+j)*NX+i;if(S[id]){U[id]=V[id]=W[id]=0;Dv[id]=0;continue}
+  const fR=i<NX-1?(S[id+1]?0:(U[id]+U[id+1])/2):U[id],fL=i>0?(S[id-1]?0:(U[id]+U[id-1])/2):U[id],
+  fS=j<NX-1?(S[id+NX]?0:(V[id]+V[id+NX])/2):V[id],fN=j>0?(S[id-NX]?0:(V[id]+V[id-NX])/2):V[id],
+  fU=k<NZ-1?(S[id+NXY]?0:(W[id]+W[id+NXY])/2):W[id],fD=k>0?(S[id-NXY]?0:(W[id]+W[id-NXY])/2):0;
+  Dv[id]=(fR-fL)/dx+(fS-fN)/dx+(fU-fD)/dz}
+ const ax=1/(dx*dx),az=1/(dz*dz);
+ for(let n=0;n<it;n++)for(let k=0;k<NZ;k++)for(let j=0;j<NX;j++)for(let i=0;i<NX;i++){const id=(k*NX+j)*NX+i;if(S[id])continue;let s=0,w=0;
+  if(i<NX-1&&!S[id+1]){s+=ax*Pp[id+1];w+=ax}if(i>0&&!S[id-1]){s+=ax*Pp[id-1];w+=ax}
+  if(j<NX-1&&!S[id+NX]){s+=ax*Pp[id+NX];w+=ax}if(j>0&&!S[id-NX]){s+=ax*Pp[id-NX];w+=ax}
+  if(k>0&&!S[id-NXY]){s+=az*Pp[id-NXY];w+=az}
+  if(k<NZ-1){if(!S[id+NXY]){s+=az*Pp[id+NXY];w+=az}}else w+=az;   // open top: p=0
+  if(w>0)Pp[id]+=1.6*((s-Dv[id])/w-Pp[id])}
+ for(let k=0;k<NZ;k++)for(let j=0;j<NX;j++)for(let i=0;i<NX;i++){const id=(k*NX+j)*NX+i;if(S[id])continue;const p=Pp[id],
+  pR=i<NX-1&&!S[id+1]?(p+Pp[id+1])/2:p,pL=i>0&&!S[id-1]?(p+Pp[id-1])/2:p,pS=j<NX-1&&!S[id+NX]?(p+Pp[id+NX])/2:p,pN=j>0&&!S[id-NX]?(p+Pp[id-NX])/2:p,
+  pU=k<NZ-1?(!S[id+NXY]?(p+Pp[id+NXY])/2:p):p/2,pD=k>0&&!S[id-NXY]?(p+Pp[id-NXY])/2:p;
+  U[id]-=(pR-pL)/dx;V[id]-=(pS-pN)/dx;W[id]-=(pU-pD)/dz}}
+function solve(dt,it){
+ const[wx,wz]=wind();
+ for(let k=0;k<NZ;k++){const z=zmin+(k+.5)*dz,e=envT(z);for(let c=0;c<NXY;c++){const id=k*NXY+c;if(S[id])continue;
+  W[id]=(W[id]+dt*.0334*(T[id]-e))*(1-dt/120);T[id]+=(e-T[id])*dt/900}}   // buoyancy, drag, entrainment/relaxation
+ advect(dt);
+ for(let k=0;k<NZ;k++)for(let j=0;j<NX;j++)for(let i=0;i<NX;i++){const m=Math.min(i,NX-1-i,j,NX-1-j,NZ-1-k);if(m>=3)continue;const id=(k*NX+j)*NX+i;if(S[id])continue;
+  const a=(3-m)*.12,z=zmin+(k+.5)*dz,f=amb(z);U[id]+=(wx*f-U[id])*a;V[id]+=(wz*f-V[id])*a;W[id]*=1-a;T[id]+=(envT(z)-T[id])*a}
+ project(it);poolStep(dt)}
+
+// ---------- sticky surface heat layer: heat pools on the ground, creeps along slopes/wind, detaches into a thermal ----------
+function poolStep(dt){
+ const{B,B2,Bc,H,pc,cell,sl,ux0,uz0,bc0}=G,r2=Math.pow(cell/dx,2),inj=poolStep.inj||(poolStep.inj=new Float32Array(NXY)),M=N-1.001;inj.fill(0);
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){const id=j*N+i,col=pc[id],q=low[col]*NXY+col,h=H[id];
+  let ux=.55*U[q],uz=.55*V[q];
+  if(h>0){const va=sl[id]>.02?1.6*Math.min(1,sl[id]/.3)*Math.min(1.3,h/300):0;ux+=va*ux0[id];uz+=va*uz0[id]}   // anabatic creep up the slope
+  const x=cl(i-ux*dt/cell,M),y=cl(j-uz*dt/cell,M),i0=x|0,j0=y|0,u=x-i0,v=y-j0,k=j0*N+i0;
+  let b=((B[k]*(1-u)+B[k+1]*u)*(1-v)+(B[k+N]*(1-u)+B[k+N+1]*u)*v+h/1200*dt)*(1-dt/1500);
+  const bc=bc0[id]/(1+.1*Math.sqrt(U[q]*U[q]+V[q]*V[q]));Bc[id]=bc;   // stickiness: steep slope=strong, crest/convex or wind=weak
+  if(b>bc){const d=Math.min(.6,.03*(1+3*(b/bc-1))*dt)*b;b-=d;inj[col]+=d*r2}
+  B2[id]=b}
+ B.set(B2);for(let c=0;c<NXY;c++)if(inj[c]>0)T[low[c]*NXY+c]+=inj[c]/dz}
+
+// ---------- ground heating (sun angle, slope, shadows, albedo) ----------
+function blur(a,r){const t=new Float32Array(N*N),o=new Float32Array(N*N);
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){let s=0,c=0;for(let k=Math.max(0,i-r);k<=Math.min(N-1,i+r);k++){s+=a[j*N+k];c++}t[j*N+i]=s/c}
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){let s=0,c=0;for(let k=Math.max(0,j-r);k<=Math.min(N-1,j+r);k++){s+=t[k*N+i];c++}o[j*N+i]=s/c}return o}
+function compute(){
+ if(!G)return;const{h,cell,alb,fs,gx,gz,H,L}=G,el=P.sunel*Math.PI/180,az=P.sunaz*Math.PI/180;
+ const sx=Math.sin(az)*Math.cos(el),sy=Math.sin(el),sz=-Math.cos(az)*Math.cos(el),hl=Math.hypot(sx,sz)||1,dxs=sx/hl,dzs=sz/hl,tn=Math.tan(el),day=el>.01;
+ let sum=0,mx=0;
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){const id=j*N+i;let cosI=0;
+  if(day){const ln=Math.hypot(gx[id],gz[id],1);cosI=Math.max(0,(-gx[id]*sx+sy-gz[id]*sz)/ln);
+   if(cosI>0)for(let k=1;k<90;k++){const ii=Math.round(i+dxs*k),jj=Math.round(j+dzs*k);if(ii<0||jj<0||ii>=N||jj>=N)break;if(h[jj*N+ii]>h[id]+k*cell*tn){cosI=0;break}}}
+  L[id]=.38+.62*Math.min(1,cosI/Math.max(.3,sy));
+  const Rn=day?(1-alb[id])*(1000*P.clear*cosI+120*sy*P.clear)*.8:0;H[id]=Rn*fs[id];sum+=H[id];if(H[id]>mx)mx=H[id]}
+ G.Hm=Math.max(1,sum/(N*N));G.Hmax=Math.max(1,mx);
+ let c=0;for(let k=0;k<N*N;k++){c+=Math.max(0,H[k])+.5;G.cum[k]=c}
+ G.zi=day?150+20*P.sunel*P.clear:0;redraw()}
+function redraw(){
+ if(!G)return;const m=+$('mode').value,{L,H}=G;
+ const lc=document.createElement('canvas');lc.width=lc.height=N;const lg=lc.getContext('2d'),ld=lg.createImageData(N,N);
+ for(let k=0;k<N*N;k++){const v=L[k]*255;ld.data.set([v,v,v,255],k*4)}lg.putImageData(ld,0,0);
+ tx.imageSmoothingEnabled=true;tx.globalCompositeOperation='source-over';tx.globalAlpha=1;
+ if(m===0)tx.drawImage(G.ic,0,0);
+ else if(m===3)tx.drawImage(G.ac,0,0,1024,1024);
+ else{const hc=document.createElement('canvas');hc.width=hc.height=N;const hg=hc.getContext('2d'),hd=hg.createImageData(N,N);
+  for(let k=0;k<N*N;k++){const v=m===1?Math.min(1,G.B[k]/G.Bc[k]):H[k]/G.Hmax;hd.data.set([255*Math.min(1,v*1.8),255*Math.min(1,Math.max(0,v*1.8-.6)),255*Math.min(.6,Math.max(0,.55-v)),255],k*4)}hg.putImageData(hd,0,0);tx.drawImage(hc,0,0,1024,1024)}
+ tx.globalCompositeOperation='multiply';tx.globalAlpha=m===0||m===3?1:.45;tx.drawImage(lc,0,0,1024,1024);tx.globalCompositeOperation='source-over';tx.globalAlpha=1;
+ tex.needsUpdate=true}
+const bil=(a,x,z)=>{const s=G.S,f=v=>Math.min(N-1.001,Math.max(0,(v/s+.5)*(N-1))),fx=f(x),fz=f(z),i=fx|0,j=fz|0,u=fx-i,v=fz-j;
+ return(a[j*N+i]*(1-u)+a[j*N+i+1]*u)*(1-v)+(a[(j+1)*N+i]*(1-u)+a[(j+1)*N+i+1]*u)*v};
+const wind=()=>{const d=P.wdir*Math.PI/180;return[-P.wspd*Math.sin(d),P.wspd*Math.cos(d)]};
+
+// ---------- tracers: advected by the solved 3D wind field ----------
+const px_=new Float32Array(MAXP),py_=new Float32Array(MAXP),pz_=new Float32Array(MAXP),pa_=new Float32Array(MAXP),pw_=new Float32Array(MAXP),fv=[0,0,0];
+function flow(x,y,z){
+ const gi=Math.min(NX-1.001,Math.max(0,(x/G.S+.5)*NX-.5)),gj=Math.min(NX-1.001,Math.max(0,(z/G.S+.5)*NX-.5)),gk=Math.min(NZ-1.001,Math.max(0,(y-zmin)/dz-.5));
+ const i0=gi|0,j0=gj|0,k0=gk|0,fx=gi-i0,fy=gj-j0,fz=gk-k0,b=(k0*NX+j0)*NX+i0;let u=0,v=0,w=0;
+ for(let c=0;c<8;c++){const q=b+((c&1)?1:0)+((c&2)?NX:0)+((c&4)?NXY:0),wt=((c&1)?fx:1-fx)*((c&2)?fy:1-fy)*((c&4)?fz:1-fz);u+=wt*U[q];v+=wt*V[q];w+=wt*W[q]}
+ fv[0]=u;fv[1]=v;fv[2]=w}
+function spawn(p,init){
+ const s=G.S,r=Math.random(),[ux,uz]=wind(),zi=Math.max(100,G.zi);let x,z,y;
+ if(r<.4&&G.cum[N*N-1]>N*N){const q=Math.random()*G.cum[N*N-1];let lo=0,hi=N*N-1;while(lo<hi){const m=(lo+hi)>>1;G.cum[m]<q?lo=m+1:hi=m}
+  x=((lo%N)/(N-1)-.5)*s+(Math.random()-.5)*G.cell;z=((lo/N|0)/(N-1)-.5)*s+(Math.random()-.5)*G.cell;y=bil(G.h,x,z)+3+Math.random()*10}
+ else if(r<.7&&P.wspd>.5){const up=Math.abs(ux)>Math.abs(uz);x=up?(ux>0?-.49:.49)*s:(Math.random()-.5)*s*.98;z=up?(Math.random()-.5)*s*.98:(uz>0?-.49:.49)*s;y=bil(G.h,x,z)+10+Math.random()*(zi+300)}
+ else{x=(Math.random()-.5)*s*.98;z=(Math.random()-.5)*s*.98;y=bil(G.h,x,z)+10+Math.random()*(zi+300)}
+ px_[p]=x;pz_[p]=z;py_[p]=y;pa_[p]=init?Math.random()*1000:0}
+function step(dt){
+ const n=Math.min(P.npart,MAXP),hs=G.S/2,top=Math.min(ztop-100,G.mean+G.zi+500);
+ for(let p=0;p<n;p++){flow(px_[p],py_[p],pz_[p]);const w=fv[2];pw_[p]=w;
+  px_[p]+=(fv[0]+(Math.random()-.5)*.8)*dt;pz_[p]+=(fv[1]+(Math.random()-.5)*.8)*dt;py_[p]+=w*dt;
+  const g=bil(G.h,px_[p],pz_[p])+3;if(py_[p]<g)py_[p]=g;pa_[p]+=dt;
+  if(Math.abs(px_[p])>hs||Math.abs(pz_[p])>hs||py_[p]>top||pa_[p]>1500)spawn(p,false)}}
+function paint(){
+ const n=Math.min(P.npart,MAXP),e=P.exag;
+ for(let p=0;p<n;p++){const t=Math.min(1,Math.max(0,(pw_[p]+2)/6));let r,g,b;
+  if(t<.33){const u=t/.33;r=.9*u;g=.4+.5*u;b=1-.1*u}else{const u=(t-.33)/.67;r=.9+.1*u;g=.9-.7*u;b=.9-.9*u}
+  ppos[p*3]=px_[p];ppos[p*3+1]=py_[p]*e;ppos[p*3+2]=pz_[p];pcol[p*3]=r;pcol[p*3+1]=g;pcol[p*3+2]=b}
+ pg.setDrawRange(0,n);pg.attributes.position.needsUpdate=true;pg.attributes.color.needsUpdate=true}
+
+function placeMarkers(){
+ if(!G)return;const el=P.sunel*Math.PI/180,az=P.sunaz*Math.PI/180,s=G.size*1000;
+ sunM.scale.setScalar(s*.03);sunM.visible=P.sunel>0;
+ sunM.position.set(O.t.x+Math.sin(az)*Math.cos(el)*s*1.1,O.t.y+Math.sin(el)*s*1.1,O.t.z-Math.cos(az)*Math.cos(el)*s*1.1);
+ const[ux,uz]=wind(),l=Math.hypot(ux,uz);arrow.visible=l>.01;
+ if(l>.01){arrow.setDirection(new THREE.Vector3(ux/l,0,uz/l));arrow.setLength(s*.1+s*.01*P.wspd,s*.03,s*.02)}
+ arrow.position.set(-s*.35*ux/(l||1),(G.mean+600)*P.exag,-s*.35*uz/(l||1))}
+function onParam(k){
+ if(!G)return;
+ if(['sunel','sunaz','clear'].includes(k))compute();
+ if(k==='exag')mesh.scale.y=P.exag;
+ placeMarkers()}
+$('mode').onchange=redraw;$('pt').onchange=e=>pts.visible=e.target.checked;
+$('go').onclick=()=>load().catch(e=>st('Error: '+e.message));
+
+let hudT=0,rdT=0;
+function loop(now){requestAnimationFrame(loop);
+ if(G&&S.length){const dt=.3*P.tscale;solve(dt,6);step(dt);paint();hudT+=1;rdT+=1;
+  if(hudT>12){hudT=0;maxW=0;let up=0;for(let i=0;i<NC;i++){const a=i%NX,b=(i%NXY/NX)|0,c=i/NXY|0;if(!S[i]&&W[i]>maxW&&Math.min(a,NX-1-a,b,NX-1-b,NZ-1-c)>=3)maxW=W[i]}let tot=0,ct=0;for(let i=0;i<N*N;i++)if(G.H[i]>0){tot+=Math.min(1,G.B[i]/G.Bc[i]);ct++}
+   $('hud').textContent=`Mean sensible heat flux: ${G.Hm.toFixed(0)} W/m²\nPeak ground flux:   ${G.Hmax.toFixed(0)} W/m²\nBoundary layer top: ${G.zi.toFixed(0)} m AGL\nStrongest lift now: ${maxW.toFixed(1)} m/s\nSurface heat stored: ${ct?(100*tot/ct).toFixed(0):0}% of release threshold\nWind: ${P.wspd} m/s from ${P.wdir}°`}
+  if(rdT>20&&$('mode').value==='1'){rdT=0;redraw()}}
+ updCam();R.render(scene,cam)}
+requestAnimationFrame(loop);updCam();
+load().catch(e=>st('Error: '+e.message));
+</script></body></html>
