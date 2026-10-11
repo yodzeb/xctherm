@@ -19,7 +19,7 @@ canvas{display:block}
 #st{position:absolute;bottom:6px;left:8px;color:#123;font-size:11px}
 #mapm{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10;display:none;align-items:center;justify-content:center}#mapbox{width:min(900px,94vw);height:min(640px,90vh);background:#fff;color:#111;border-radius:8px;display:flex;flex-direction:column;overflow:hidden}#map{flex:1}#mapbox .bar{display:flex;gap:6px;padding:6px;align-items:center}#mapbox input{flex:1;padding:4px}#mapbox button{padding:5px 10px}
 #leg{position:absolute;right:8px;bottom:8px;color:#fff;background:rgba(15,20,30,.82);padding:6px 8px;border-radius:8px;font-size:11px}
-#leg i{display:inline-block;width:90px;height:8px;background:linear-gradient(90deg,#0066ff,#e6e6e6,#ff3300);vertical-align:middle}
+#leg i{display:inline-block;width:90px;height:8px;background:linear-gradient(90deg,#0066ff,#e6e6e6,#ff3300);vertical-align:middle}#leg i.sp{background:linear-gradient(90deg,#1a80ff,#fff333,#ff3300)}
 </style></head><body>
 <div id="tb"><button id="tg" title="Show/hide the control panel">☰</button><button id="tg2" title="Show/hide HUD and legend">📊</button><button id="hb" title="Help">? Help</button></div>
 <div id="ui">
@@ -31,18 +31,18 @@ canvas{display:block}
 <div class="g2"><input id="pn" placeholder="Site name"><div class="g2" style="margin:0"><button id="ps">Save</button><button id="pd">Delete</button></div></div><select id="pl"></select>
 <div class="g2"><button id="pe">Export JSON</button><button id="pi">Import JSON</button></div><input type="file" id="pf" accept=".json,application/json" style="display:none"></details>
 <div id="sl"></div>
-<div id="xtra" style="display:none"><button id="play"></button><select id="mode" title="What is painted on the terrain"><option value="0">Aerial photo + sun shading</option><option value="1">Sticky surface heat pool (B / critical)</option><option value="2">Ground heat flux</option><option value="3">Albedo</option></select><label class="ck"><input type="checkbox" id="pt" checked> Show air tracers</label></div>
+<div id="xtra" style="display:none"><button id="play"></button><select id="mode" title="What is painted on the terrain"><option value="0">Aerial photo + sun shading</option><option value="1">Sticky surface heat pool (B / critical)</option><option value="2">Ground heat flux</option><option value="3">Albedo</option></select><select id="cmode" title="How tracers are coloured and filtered"><option value="vz">Tracers coloured by vertical speed (vz)</option><option value="speed">Tracers coloured by air speed</option></select><label class="ck"><input type="checkbox" id="pt" checked> Show air tracers</label></div>
 </div>
 <div id="hlp"><div id="hbox"><div class="bar"><b>Thermal Lab – help</b><button id="hx">✕ Close</button></div><div id="hc"></div></div></div>
 <div id="mapm"><div id="mapbox"><div class="bar"><input id="mq" placeholder="Search a place (OpenStreetMap / Nominatim)…"><button id="mqb">Search</button></div><div id="map"></div><div class="bar"><span id="mc" style="flex:1;font-size:12px">Click on the map to choose the centre of the zone</span><button id="mapok">Use this location</button><button id="mapx">Cancel</button></div></div></div>
-<div id="hud"></div><div id="leg">tracer vertical speed: sink <i></i> lift</div><div id="st"></div>
+<div id="hud"></div><div id="leg"><span id="lt1">sink</span> <i id="lg"></i> <span id="lt2">lift</span></div><div id="st"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 /* ===================== CONFIG – edit freely =====================
    sliders: [id, label, min, max, default, step, group, help text]                     */
 const CFG={
  N:161,                       // terrain/display grid cells per side
- maxTracers:200000,
+ maxTracers:50000,
  dayMinutes:3,                // real minutes for a full 24 h when "Play day" is running
  sizes:[2,4,6,8,16,32,64],    // selectable zone sizes (km)
  defaultSize:4,
@@ -58,8 +58,9 @@ const CFG={
   ['tscale','Sim speed ×',1,60,8,1,'Sun & time','Simulation speed multiplier (more simulated seconds per frame). Ignored while the day cycle is playing.'],
   ['clear','Clear sky',.2,1,.9,.05,'Sun & time','Clear-sky factor / ground dryness: scales sunlight and therefore ground heating (1 = clear and dry, low = hazy / damp).'],
   ['exag','Vert. exag.',1,3,1.3,.1,'Display','Vertical exaggeration of the terrain and tracers (display only).'],
-  ['npart','Tracers',1000,200000,7000,1000,'Display','Number of air tracers. More gives a denser picture but is slower.'],
-  ['vzmin','vz filter ≥',-3,5,-3,.1,'Display','Only tracers whose vertical speed (m/s) is above this value are drawn. Use 1–2 to show only lift; −3 shows everything.']]};
+  ['npart','Tracers',1000,50000,7000,1000,'Display','Number of air tracers. More gives a denser picture but is slower.'],
+  ['vzmin','vz filter ≥',-3,5,-3,.1,'Display','Only tracers whose vertical speed (m/s) is above this value are drawn. Use 1–2 to show only lift; −3 shows everything.'],
+  ['spmin','Speed filter ≥',0,25,0,.5,'Display','Only tracers whose total air speed (m/s, 3D) is above this value are drawn. Shown instead of the vz filter when tracers are coloured by speed.']]};
 const $=id=>document.getElementById(id),N=CFG.N,MAXP=CFG.maxTracers,P={sunel:50,sunaz:180};
 CFG.sliders.forEach(x=>P[x[0]]=x[4]);
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -70,7 +71,7 @@ function setParam(k,v){setQuiet(k,v);onParam(k)}
 const GRP={};
 function grp(name){if(!GRP[name]){const d=document.createElement('details');d.open=['Wind','Sun & time'].includes(name);d.innerHTML=`<summary>${name}</summary><div></div>`;$('sl').appendChild(d);GRP[name]=d.lastChild}return GRP[name]}
 CFG.sliders.forEach(([k,l,mn,mx,v,st_,g,hp])=>{const d=document.createElement('div');d.className='sr';d.title=hp||l;d.innerHTML=`<span>${l}</span><input type="range" id="${k}" min="${mn}" max="${mx}" step="${st_}" value="${v}"><b id="v_${k}">${lbl(k,v)}</b>`;grp(g||'Other').appendChild(d);d.querySelector('input').oninput=e=>setParam(k,+e.target.value)});
-grp('Sun & time').appendChild($('play'));grp('Display').append($('mode'),$('pt').parentNode);
+grp('Sun & time').appendChild($('play'));grp('Display').append($('mode'),$('cmode'),$('pt').parentNode);
 CFG.sizes.forEach(z=>{const o=document.createElement('option');o.value=z;o.textContent=z+' km';if(z===CFG.defaultSize)o.selected=true;$('sz').appendChild(o)});
 const terr=(z,x,y)=>`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 const SRC={esri:{max:17,url:(z,x,y)=>`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`},
@@ -268,7 +269,7 @@ const bil=(a,x,z)=>{const s=G.S,f=v=>Math.min(N-1.001,Math.max(0,(v/s+.5)*(N-1))
 const wind=()=>{const d=P.wdir*Math.PI/180;return[-P.wspd*Math.sin(d),P.wspd*Math.cos(d)]};
 
 // ---------- tracers: advected by the solved 3D wind field ----------
-const px_=new Float32Array(MAXP),py_=new Float32Array(MAXP),pz_=new Float32Array(MAXP),pa_=new Float32Array(MAXP),pw_=new Float32Array(MAXP),fv=[0,0,0];
+const px_=new Float32Array(MAXP),py_=new Float32Array(MAXP),pz_=new Float32Array(MAXP),pa_=new Float32Array(MAXP),pw_=new Float32Array(MAXP),psp_=new Float32Array(MAXP),fv=[0,0,0];
 function flow(x,y,z){
  const gi=Math.min(NX-1.001,Math.max(0,(x/G.S+.5)*NX-.5)),gj=Math.min(NX-1.001,Math.max(0,(z/G.S+.5)*NX-.5)),gk=Math.min(NZ-1.001,Math.max(0,(y-zmin)/dz-.5));
  const i0=gi|0,j0=gj|0,k0=gk|0,fx=gi-i0,fy=gj-j0,fz=gk-k0,b=(k0*NX+j0)*NX+i0;let u=0,v=0,w=0;
@@ -285,18 +286,23 @@ function spawn(p,init){
  px_[p]=x;pz_[p]=z;py_[p]=y;pa_[p]=init?Math.random()*1000:0}
 function step(dt){
  const n=Math.min(P.npart,MAXP),hs=G.S/2,top=Math.min(ztop-100,G.mean+G.zi+500);
- for(let p=0;p<n;p++){let x=px_[p],y=py_[p],z=pz_[p];flow(x,y,z);pw_[p]=fv[2];
+ for(let p=0;p<n;p++){let x=px_[p],y=py_[p],z=pz_[p];flow(x,y,z);pw_[p]=fv[2];psp_[p]=Math.sqrt(fv[0]*fv[0]+fv[1]*fv[1]+fv[2]*fv[2]);
   const nsub=Math.min(3,Math.max(1,Math.ceil(Math.hypot(fv[0],fv[1],fv[2])*dt/(.4*dx)))),h=dt/nsub;
   for(let q=0;q<nsub;q++){flow(x,y,z);const u1=fv[0],v1=fv[1],w1=fv[2];flow(x+.5*h*u1,y+.5*h*w1,z+.5*h*v1);   // RK2 midpoint
    x+=(fv[0]+(Math.random()-.5)*.8)*h;z+=(fv[1]+(Math.random()-.5)*.8)*h;y+=fv[2]*h}
   const g=bil(G.h,x,z)+3;if(y<g)y=g;px_[p]=x;py_[p]=y;pz_[p]=z;pa_[p]+=dt;
   if(Math.abs(x)>hs||Math.abs(z)>hs||y>top||pa_[p]>1500)spawn(p,false)}}
 function paint(){
- const n=Math.min(P.npart,MAXP),e=P.exag;let c=0;
- for(let p=0;p<n;p++){if(pw_[p]<P.vzmin)continue;const t=Math.min(1,Math.max(0,(pw_[p]+2)/6));let r,g,b;
-  if(t<.33){const u=t/.33;r=.9*u;g=.4+.5*u;b=1-.1*u}else{const u=(t-.33)/.67;r=.9+.1*u;g=.9-.7*u;b=.9-.9*u}
+ const n=Math.min(P.npart,MAXP),e=P.exag,sp=$('cmode').value==='speed',thr=sp?P.spmin:P.vzmin,smax=Math.max(4,1.3*Math.max(P.wspd,P.bstr));let c=0;
+ for(let p=0;p<n;p++){const val=sp?psp_[p]:pw_[p];if(val<thr)continue;let r,g,b;
+  if(sp){const t=Math.min(1,val/smax);if(t<.5){const u=t*2;r=.1+.9*u;g=.5+.45*u;b=1-.8*u}else{const u=(t-.5)*2;r=1;g=.95-.75*u;b=.2-.2*u}}   // blue (slow) > yellow > red (fast)
+  else{const t=Math.min(1,Math.max(0,(val+2)/6));
+   if(t<.33){const u=t/.33;r=.9*u;g=.4+.5*u;b=1-.1*u}else{const u=(t-.33)/.67;r=.9+.1*u;g=.9-.7*u;b=.9-.9*u}}   // blue (sink) > grey > red (lift)
   ppos[c*3]=px_[p];ppos[c*3+1]=py_[p]*e;ppos[c*3+2]=pz_[p];pcol[c*3]=r;pcol[c*3+1]=g;pcol[c*3+2]=b;c++}
  pg.setDrawRange(0,c);pg.attributes.position.needsUpdate=true;pg.attributes.color.needsUpdate=true}
+function applyCMode(){const sp=$('cmode').value==='speed';$('spmin').parentNode.style.display=sp?'':'none';$('vzmin').parentNode.style.display=sp?'none':'';
+ $('lg').className=sp?'sp':'';$('lt1').textContent=sp?'slow':'sink';$('lt2').textContent=sp?'fast (0–'+Math.max(4,1.3*Math.max(P.wspd,P.bstr)).toFixed(0)+' m/s)':'lift'}
+$('cmode').onchange=applyCMode;applyCMode();
 
 function placeMarkers(){
  if(!G)return;const el=P.sunel*Math.PI/180,az=P.sunaz*Math.PI/180,s=G.S;
@@ -305,6 +311,7 @@ function placeMarkers(){
  const arr=(A,sp,d,y)=>{const r=d*Math.PI/180,vx=-Math.sin(r),vz=Math.cos(r);A.visible=sp>.05;if(!A.visible)return;A.setDirection(new THREE.Vector3(vx,0,vz));A.setLength(s*.06+s*.01*sp,s*.03,s*.02);A.position.set(-s*.35*vx,y*P.exag,-s*.35*vz)};
  arr(arrow,P.wspd,P.wdir,(zmin||G.mean)+P.balt+500);arr(arrow2,P.bstr,P.bdir,(zmin||G.mean)+Math.max(80,P.balt*.5))}
 function onParam(k){
+ if(k==='wspd'||k==='bstr')applyCMode();
  if(k==='month'||k==='hour')sunPos();
  if(!G)return;
  if(k==='month'||k==='hour'||k==='clear')compute();
@@ -315,12 +322,13 @@ const LS='thermalLabPlaces';let places=[];try{places=JSON.parse(localStorage.get
 const esc=t=>String(t).replace(/</g,'&lt;'),
  plRefresh=()=>{$('pl').innerHTML='<option value="">— load a saved site —</option>'+places.map((p,i)=>`<option value="${i}">${p.ext?'★ ':''}${esc(p.n)} (${p.lat}, ${p.lon}, ${p.sz} km)</option>`).join('')},
  plStore=()=>{try{localStorage.setItem(LS,JSON.stringify(places.filter(p=>!p.ext)))}catch(e){st('Cannot write to localStorage')}};
-function snapshot(n){return{n,lat:+$('lat').value,lon:+$('lon').value,sz:+$('sz').value,src:$('src').value,mode:$('mode').value,pt:$('pt').checked,
+function snapshot(n){return{n,lat:+$('lat').value,lon:+$('lon').value,sz:+$('sz').value,src:$('src').value,mode:$('mode').value,cmode:$('cmode').value,pt:$('pt').checked,
  P:Object.fromEntries(CFG.sliders.map(x=>[x[0],P[x[0]]])),cam:{th:O.th,ph:O.ph,d:O.d}}}
 async function applySite(p){
  $('lat').value=p.lat;$('lon').value=p.lon;if(p.sz)$('sz').value=p.sz;if(p.src)$('src').value=p.src;if(p.mode!==undefined)$('mode').value=p.mode;
  if(p.pt!==undefined){$('pt').checked=p.pt;pts.visible=p.pt}
- if(p.P)for(const k in p.P)setQuiet(k,p.P[k]);$('pn').value=p.n||'';
+ if(p.cmode)$('cmode').value=p.cmode;
+ if(p.P)for(const k in p.P)setQuiet(k,p.P[k]);$('pn').value=p.n||'';applyCMode();
  await load();if(p.cam){O.th=p.cam.th;O.ph=p.cam.ph;O.d=p.cam.d}}
 $('ps').onclick=()=>{const n=$('pn').value.trim();if(!n)return st('Enter a name first');const p=snapshot(n),i=places.findIndex(q=>q.n===n&&!q.ext);i<0?places.push(p):places[i]=p;plStore();plRefresh();st('Saved "'+n+'" (all panel settings)')};
 $('pl').onchange=e=>{const p=places[e.target.value];if(p)applySite(p).catch(er=>st('Error: '+er.message))};
@@ -375,10 +383,10 @@ function buildHelp(){
 <tr><td><b>📍 Location</b></td><td>Latitude / longitude of the zone centre, zone size (km per side) and aerial imagery source. <b>Load terrain</b> downloads open elevation (AWS Terrain Tiles) and imagery tiles. <b>Pick on map</b> opens an OpenStreetMap view: search or click to set the centre; the orange rectangle is the zone.</td></tr>
 <tr><td><b>💾 Saved sites</b></td><td><b>Save</b> stores the location <i>and every slider/option and the camera view</i> under a name (in this browser). <b>Export JSON</b> writes all sites to <code>sites.json</code>; <b>Import JSON</b> reads one back. A <code>sites.json</code> next to the page is loaded automatically when the page is served over http(s) (★ = from file); the optional key <code>"default"</code> names the site opened at start.</td></tr>
 <tr><td><b>▶ Play full day</b></td><td>Runs the sun through 24 h in ${CFG.dayMinutes} min (<code>CFG.dayMinutes</code>); the simulated clock follows, so thermals build up and fade during the day.</td></tr>
-<tr><td><b>Display mode</b></td><td>Photo with sun shading · <b>Sticky heat pool</b> (how close each ground cell is to releasing a thermal: hot colours = about to detach) · Ground heat flux · Albedo (estimated from the photo).</td></tr></table>
+<tr><td><b>Display mode</b></td><td><b>Tracer colour</b> (select under the display mode): by vertical speed vz (blue sink → red lift) or by total air speed (blue slow → red fast); the filter slider switches accordingly (vz filter / speed filter). Terrain: Photo with sun shading · <b>Sticky heat pool</b> (how close each ground cell is to releasing a thermal: hot colours = about to detach) · Ground heat flux · Albedo (estimated from the photo).</td></tr></table>
 <h4>Sliders</h4><table>${rows}</table><p><small>Hover a slider for its description. Ranges and defaults are in the <code>CFG</code> block at the top of the script.</small></p>
 <h4>Reading the picture</h4><ul>
-<li><b>Tracer colours:</b> blue = sinking air, grey/white ≈ still, red = rising air (vertical speed from about −2 to +4 m/s).</li>
+<li><b>Tracer colours:</b> in vz mode blue = sinking air, grey ≈ still, red = rising air (about −2 to +4 m/s); in speed mode blue = slow, yellow = medium, red = fast (scale shown in the legend).</li>
 <li><b>Arrows:</b> blue = global wind, green = valley breeze; the yellow sphere is the sun.</li>
 <li><b>HUD:</b> mean/peak ground heat flux, boundary-layer top, strongest lift, share of stored heat vs. release threshold.</li></ul>
 <h4>How the model works (and its limits)</h4><ul>
