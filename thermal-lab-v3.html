@@ -4,57 +4,62 @@
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#9ec5e8;font:12px system-ui,sans-serif}
 canvas{display:block}
-#ui{position:absolute;top:8px;left:8px;width:230px;max-height:calc(100% - 16px);overflow:auto;background:rgba(15,20,30,.82);color:#e8eef5;padding:10px;border-radius:8px}
-#ui label{display:block;margin-top:6px}#ui input[type=range]{width:100%}
-#ui input,#ui select,#ui button{width:100%;box-sizing:border-box;margin-top:2px;padding:3px}
-#ui .r{display:flex;gap:4px}#ui h3{margin:8px 0 2px;font-size:12px;color:#ffc46b}
+#tb{position:absolute;top:8px;left:8px;display:flex;gap:4px;z-index:3}
+#tb button{background:rgba(15,20,30,.85);color:#fff;border:0;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:13px}
+#ui{position:absolute;top:44px;left:8px;width:292px;max-height:calc(100% - 54px);overflow:auto;background:rgba(15,20,30,.85);color:#e8eef5;padding:4px 8px;border-radius:8px;box-sizing:border-box}
+#ui details{border-top:1px solid rgba(255,255,255,.12);padding:2px 0}#ui details:first-child{border:0}
+#ui summary{cursor:pointer;font-weight:600;color:#ffc46b;padding:3px 0;font-size:12px}
+#ui input,#ui select,#ui button{box-sizing:border-box;padding:2px 4px;font-size:11px;min-width:0}
+#ui select{width:100%;margin:2px 0}.g2{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:3px 0}.g2>*{width:100%}
+.sr{display:grid;grid-template-columns:80px 1fr 58px;align-items:center;gap:4px;margin:1px 0}.sr span{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sr input{width:100%;margin:0}.sr b{text-align:right;font-size:11px;font-weight:600}
+#ui .ck{display:block;margin:3px 0;font-size:11px}#ui #play{width:100%;margin:4px 0}
+#hlp{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:11;display:none;align-items:center;justify-content:center}#hbox{width:min(780px,94vw);max-height:90vh;background:#fff;color:#111;border-radius:8px;display:flex;flex-direction:column}
+#hbox .bar{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;border-bottom:1px solid #ddd;font-size:15px}#hc{overflow:auto;padding:2px 16px 14px;font-size:13px;line-height:1.45}#hc h4{margin:14px 0 4px;color:#b45309}#hc table{border-collapse:collapse;width:100%}#hc td{padding:3px 6px;vertical-align:top;border-bottom:1px solid #eee}#hc kbd{background:#eee;border:1px solid #bbb;border-radius:3px;padding:0 4px}
 #hud{position:absolute;right:8px;top:8px;background:rgba(15,20,30,.82);color:#e8eef5;padding:8px 10px;border-radius:8px;white-space:pre;font:11px monospace}
 #st{position:absolute;bottom:6px;left:8px;color:#123;font-size:11px}
 #mapm{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10;display:none;align-items:center;justify-content:center}#mapbox{width:min(900px,94vw);height:min(640px,90vh);background:#fff;color:#111;border-radius:8px;display:flex;flex-direction:column;overflow:hidden}#map{flex:1}#mapbox .bar{display:flex;gap:6px;padding:6px;align-items:center}#mapbox input{flex:1;padding:4px}#mapbox button{padding:5px 10px}
 #leg{position:absolute;right:8px;bottom:8px;color:#fff;background:rgba(15,20,30,.82);padding:6px 8px;border-radius:8px;font-size:11px}
 #leg i{display:inline-block;width:90px;height:8px;background:linear-gradient(90deg,#0066ff,#e6e6e6,#ff3300);vertical-align:middle}
 </style></head><body>
+<div id="tb"><button id="tg" title="Show/hide the control panel">☰</button><button id="tg2" title="Show/hide HUD and legend">📊</button><button id="hb" title="Help">? Help</button></div>
 <div id="ui">
-<b>Thermal Lab</b>
-<h3>Zone (open data)</h3>
-<div class="r"><input id="lat" value="45.3125" title="lat"><input id="lon" value="5.8967" title="lon"></div>
-<label>Size <select id="sz"></select> km</label>
-<label>Imagery <select id="src"><option value="esri">Esri World Imagery</option><option value="eox">Sentinel-2 cloudless (EOX)</option></select></label>
-<button id="map2d">📍 Choose on 2D map</button>
-<button id="go">Load terrain</button>
-<h3>Saved sites (full setup)</h3><input id="pn" placeholder="Name for this site"><div class="r"><button id="ps">Save</button><button id="pd">Delete</button></div><select id="pl"></select>
-<div class="r"><button id="pe">Export JSON</button><button id="pi">Import JSON</button></div><input type="file" id="pf" accept=".json,application/json" style="display:none">
-<h3>Environment</h3><div id="sl"></div><button id="play"></button>
-<h3>Display</h3>
-<select id="mode"><option value="0">Aerial photo + sun shading</option><option value="1">Sticky surface heat pool (B / critical)</option><option value="2">Ground heat flux</option><option value="3">Albedo</option></select>
-<label><input type="checkbox" id="pt" checked style="width:auto"> Air tracers</label>
+<details open><summary>📍 Location</summary>
+<div class="g2"><input id="lat" value="45.3125" title="Latitude (°N, negative = south)"><input id="lon" value="5.8967" title="Longitude (°E, negative = west)"></div>
+<div class="g2"><select id="sz" title="Zone size (km per side)"></select><select id="src" title="Aerial imagery source"><option value="esri">Esri imagery</option><option value="eox">Sentinel-2 (EOX)</option></select></div>
+<div class="g2"><button id="map2d">📍 Pick on map</button><button id="go">Load terrain</button></div></details>
+<details><summary>💾 Saved sites</summary>
+<div class="g2"><input id="pn" placeholder="Site name"><div class="g2" style="margin:0"><button id="ps">Save</button><button id="pd">Delete</button></div></div><select id="pl"></select>
+<div class="g2"><button id="pe">Export JSON</button><button id="pi">Import JSON</button></div><input type="file" id="pf" accept=".json,application/json" style="display:none"></details>
+<div id="sl"></div>
+<div id="xtra" style="display:none"><button id="play"></button><select id="mode" title="What is painted on the terrain"><option value="0">Aerial photo + sun shading</option><option value="1">Sticky surface heat pool (B / critical)</option><option value="2">Ground heat flux</option><option value="3">Albedo</option></select><label class="ck"><input type="checkbox" id="pt" checked> Show air tracers</label></div>
 </div>
+<div id="hlp"><div id="hbox"><div class="bar"><b>Thermal Lab – help</b><button id="hx">✕ Close</button></div><div id="hc"></div></div></div>
 <div id="mapm"><div id="mapbox"><div class="bar"><input id="mq" placeholder="Search a place (OpenStreetMap / Nominatim)…"><button id="mqb">Search</button></div><div id="map"></div><div class="bar"><span id="mc" style="flex:1;font-size:12px">Click on the map to choose the centre of the zone</span><button id="mapok">Use this location</button><button id="mapx">Cancel</button></div></div></div>
 <div id="hud"></div><div id="leg">tracer vertical speed: sink <i></i> lift</div><div id="st"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 /* ===================== CONFIG – edit freely =====================
-sliders: [id, label, min, max, default, step]                        */
+   sliders: [id, label, min, max, default, step, group, help text]                     */
 const CFG={
  N:161,                       // terrain/display grid cells per side
- maxTracers:300000,
+ maxTracers:200000,
  dayMinutes:3,                // real minutes for a full 24 h when "Play day" is running
  sizes:[2,4,6,8,16,32,64],    // selectable zone sizes (km)
- defaultSize:8,
+ defaultSize:4,
  vorticity:.006,              // vorticity confinement (keeps eddies/shear rolls alive; 0 = off)
- sliders:[
-  ['wspd','Global wind speed (m/s)',0,20,5,.5],
-  ['wdir','Global wind from (°)',0,359,270,1],
-  ['bstr','Valley breeze strength (m/s)',0,12,3,.5],
-  ['bdir','Valley breeze from (°)',0,359,90,1],
-  ['balt','Breeze altitude (m above lowest ground)',0,3000,600,50],
-  ['month','Month of year',1,12,6.5,.1],
-  ['hour','Solar time of day',0,24,13,.05],
-  ['clear','Clear sky / dry ground',.2,1,.9,.05],
-  ['exag','Vertical exaggeration',1,3,1.3,.1],
-  ['npart','Tracer count',1000,50000,7000,1000],
-  ['vzmin','Show tracers with vz above (m/s)',-3,5,-3,.1],
-  ['tscale','Time speed × (not used while playing a day)',1,60,8,1]]};
+ sliders:[   // keep sliders of the same group next to each other
+  ['wspd','Global wind',0,20,5,.5,'Wind','Speed (m/s) of the global wind blowing above the breeze altitude. It increases slightly with height.'],
+  ['wdir','Global from °',0,359,270,1,'Wind','Direction the global wind comes FROM (0 = N, 90 = E, 180 = S, 270 = W).'],
+  ['bstr','Breeze',0,12,3,.5,'Wind','Speed (m/s) of the valley breeze: a local, heating-driven wind imposed at the zone edges below the breeze altitude. 0 disables it.'],
+  ['bdir','Breeze from °',0,359,90,1,'Wind','Direction the breeze comes FROM (typically up-valley by day). Opposing the global wind creates shear layers and turbulence where they meet.'],
+  ['balt','Breeze alt. m',0,3000,600,50,'Wind','Height (m above the lowest ground of the zone) below which the breeze is imposed at the zone edges. Above it (blended over ~300 m) the global wind applies.'],
+  ['month','Month',1,12,6.5,.1,'Sun & time','Month of the year (1 = Jan … 12 = Dec, fractions allowed). With the latitude it sets the sun declination, hence sun height and day length.'],
+  ['hour','Solar time',0,24,13,.05,'Sun & time','Solar time of day (12:00 = sun due south in the northern hemisphere). Sun elevation/azimuth derive from month, time and latitude. Sun under the horizon = no heating.'],
+  ['tscale','Sim speed ×',1,60,8,1,'Sun & time','Simulation speed multiplier (more simulated seconds per frame). Ignored while the day cycle is playing.'],
+  ['clear','Clear sky',.2,1,.9,.05,'Sun & time','Clear-sky factor / ground dryness: scales sunlight and therefore ground heating (1 = clear and dry, low = hazy / damp).'],
+  ['exag','Vert. exag.',1,3,1.3,.1,'Display','Vertical exaggeration of the terrain and tracers (display only).'],
+  ['npart','Tracers',1000,50000,7000,1000,'Display','Number of air tracers. More gives a denser picture but is slower.'],
+  ['vzmin','vz filter ≥',-3,5,-3,.1,'Display','Only tracers whose vertical speed (m/s) is above this value are drawn. Use 1–2 to show only lift; −3 shows everything.']]};
 const $=id=>document.getElementById(id),N=CFG.N,MAXP=CFG.maxTracers,P={sunel:50,sunaz:180};
 CFG.sliders.forEach(x=>P[x[0]]=x[4]);
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -62,8 +67,11 @@ const FMT={hour:v=>{let h=Math.floor(v),m=Math.round((v-h)*60);if(m===60){h++;m=
 const lbl=(k,v)=>(FMT[k]||(x=>x))(v);
 function setQuiet(k,v){if(!(k in P)||!$(k))return;P[k]=+v;$(k).value=v;$('v_'+k).textContent=lbl(k,P[k])}
 function setParam(k,v){setQuiet(k,v);onParam(k)}
-CFG.sliders.forEach(([k,l,mn,mx,v,st_])=>{const d=document.createElement('div');d.innerHTML=`<label>${l}: <b id="v_${k}">${lbl(k,v)}</b></label><input type="range" id="${k}" min="${mn}" max="${mx}" step="${st_}" value="${v}">`;$('sl').appendChild(d);d.querySelector('input').oninput=e=>setParam(k,+e.target.value)});
-CFG.sizes.forEach(z=>{const o=document.createElement('option');o.textContent=z;if(z===CFG.defaultSize)o.selected=true;$('sz').appendChild(o)});
+const GRP={};
+function grp(name){if(!GRP[name]){const d=document.createElement('details');d.open=['Wind','Sun & time'].includes(name);d.innerHTML=`<summary>${name}</summary><div></div>`;$('sl').appendChild(d);GRP[name]=d.lastChild}return GRP[name]}
+CFG.sliders.forEach(([k,l,mn,mx,v,st_,g,hp])=>{const d=document.createElement('div');d.className='sr';d.title=hp||l;d.innerHTML=`<span>${l}</span><input type="range" id="${k}" min="${mn}" max="${mx}" step="${st_}" value="${v}"><b id="v_${k}">${lbl(k,v)}</b>`;grp(g||'Other').appendChild(d);d.querySelector('input').oninput=e=>setParam(k,+e.target.value)});
+grp('Sun & time').appendChild($('play'));grp('Display').append($('mode'),$('pt').parentNode);
+CFG.sizes.forEach(z=>{const o=document.createElement('option');o.value=z;o.textContent=z+' km';if(z===CFG.defaultSize)o.selected=true;$('sz').appendChild(o)});
 const terr=(z,x,y)=>`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 const SRC={esri:{max:17,url:(z,x,y)=>`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`},
  eox:{max:13,url:(z,x,y)=>`https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2021_3857/default/g/${z}/${y}/${x}.jpg`}};
@@ -352,6 +360,41 @@ function loop(now){requestAnimationFrame(loop);
   if(rdT>20&&$('mode').value==='1'){rdT=0;redraw()}}
  updCam();R.render(scene,cam)}
 requestAnimationFrame(loop);updCam();
+// ---- help popup + UI toggles ----
+function buildHelp(){
+ const rows=CFG.sliders.map(([k,l,mn,mx,v,st_,g,hp])=>`<tr><td><b>${l}</b><br><small>${g||''}</small></td><td>${mn} … ${mx}<br><small>step ${st_}</small></td><td>${hp||''}</td></tr>`).join('');
+ $('hc').innerHTML=`
+<h4>Moving the camera</h4><table>
+<tr><td><b>Left-drag</b></td><td>Rotate around the point you look at (orbit).</td></tr>
+<tr><td><b>Right-drag</b> / <b>middle-drag</b> / <kbd>Shift</kbd> + left-drag</td><td>Pan (translate) across the terrain.</td></tr>
+<tr><td><b>Mouse wheel</b></td><td>Zoom in/out (limits: 100 m to 500 km from the target).</td></tr>
+<tr><td><b>One finger</b> (touch)</td><td>Rotate. There is no pinch-zoom or two-finger pan yet.</td></tr>
+<tr><td><kbd>H</kbd></td><td>Hide / show the whole interface (panel, HUD, legend). <kbd>Esc</kbd> closes dialogs. <kbd>?</kbd> opens this help.</td></tr>
+<tr><td><b>☰ / 📊 buttons</b></td><td>Show/hide the control panel / the HUD and legend only.</td></tr></table>
+<h4>Panel</h4><table>
+<tr><td><b>📍 Location</b></td><td>Latitude / longitude of the zone centre, zone size (km per side) and aerial imagery source. <b>Load terrain</b> downloads open elevation (AWS Terrain Tiles) and imagery tiles. <b>Pick on map</b> opens an OpenStreetMap view: search or click to set the centre; the orange rectangle is the zone.</td></tr>
+<tr><td><b>💾 Saved sites</b></td><td><b>Save</b> stores the location <i>and every slider/option and the camera view</i> under a name (in this browser). <b>Export JSON</b> writes all sites to <code>sites.json</code>; <b>Import JSON</b> reads one back. A <code>sites.json</code> next to the page is loaded automatically when the page is served over http(s) (★ = from file); the optional key <code>"default"</code> names the site opened at start.</td></tr>
+<tr><td><b>▶ Play full day</b></td><td>Runs the sun through 24 h in ${CFG.dayMinutes} min (<code>CFG.dayMinutes</code>); the simulated clock follows, so thermals build up and fade during the day.</td></tr>
+<tr><td><b>Display mode</b></td><td>Photo with sun shading · <b>Sticky heat pool</b> (how close each ground cell is to releasing a thermal: hot colours = about to detach) · Ground heat flux · Albedo (estimated from the photo).</td></tr></table>
+<h4>Sliders</h4><table>${rows}</table><p><small>Hover a slider for its description. Ranges and defaults are in the <code>CFG</code> block at the top of the script.</small></p>
+<h4>Reading the picture</h4><ul>
+<li><b>Tracer colours:</b> blue = sinking air, grey/white ≈ still, red = rising air (vertical speed from about −2 to +4 m/s).</li>
+<li><b>Arrows:</b> blue = global wind, green = valley breeze; the yellow sphere is the sun.</li>
+<li><b>HUD:</b> mean/peak ground heat flux, boundary-layer top, strongest lift, share of stored heat vs. release threshold.</li></ul>
+<h4>How the model works (and its limits)</h4><ul>
+<li>A coarse 3D flow solver (about 100 m cells for a 4 km zone) pushes the wind around and over the terrain; breeze and global wind are imposed at the zone edges, where they meet they create shear and eddies.</li>
+<li>Sun angle, slope, cast shadows, albedo and land cover (water / vegetation / bare) give each ground cell a heat flux.</li>
+<li>Heat first <b>sticks</b> to the ground in a thin layer that creeps along the wind and up slopes. When it exceeds a threshold (low on flat ground, crests, in wind; high on steep slopes) it detaches as a warm bubble that rises under buoyancy until the inversion above the boundary layer stops it.</li>
+<li>Educational tool only: not calibrated, no humidity/clouds, coarse terrain; <b>never use it for flight planning</b>.</li></ul>`}
+buildHelp();
+const hide=(el,v)=>el.style.display=v?'none':'';let allHidden=false;
+$('hb').onclick=()=>$('hlp').style.display='flex';$('hx').onclick=()=>$('hlp').style.display='none';
+$('tg').onclick=()=>hide($('ui'),$('ui').style.display!=='none');
+$('tg2').onclick=()=>{const v=$('hud').style.display!=='none';hide($('hud'),v);hide($('leg'),v);hide($('st'),v)};
+addEventListener('keydown',e=>{if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)&&e.key!=='Escape')return;
+ if(e.key==='h'||e.key==='H'){allHidden=!allHidden;['ui','hud','leg','st'].forEach(i=>hide($(i),allHidden))}
+ else if(e.key==='?'||e.key==='F1'){e.preventDefault();$('hlp').style.display='flex'}
+ else if(e.key==='Escape'){$('hlp').style.display='none';$('mapm').style.display='none'}});
 (async()=>{let j=null;   // auto-load sites.json placed next to this page (needs http(s); browsers block fetch() on file://)
  try{const r=await fetch('sites.json',{cache:'no-store'});if(r.ok)j=await r.json()}catch(e){}
  let first=null;if(j){const n=addSites(j,true);st('sites.json: '+n+' site(s) loaded');if(j.default)first=places.find(p=>p.n===j.default)}
