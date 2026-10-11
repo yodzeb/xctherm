@@ -17,9 +17,10 @@ canvas{display:block}
 <b>Thermal Lab</b>
 <h3>Zone (open data)</h3>
 <div class="r"><input id="lat" value="45.3125" title="lat"><input id="lon" value="5.8967" title="lon"></div>
-<label>Size <select id="sz"><option>2</option><option selected>4</option><option>6</option><option>8</option><option>16</option></select> km</label>
+<label>Size <select id="sz"><option>2</option><option selected>4</option><option>6</option><option>8</option><option>16</option><option>32</option><option>64</option></select> km</label>
 <label>Imagery <select id="src"><option value="esri">Esri World Imagery</option><option value="eox">Sentinel-2 cloudless (EOX)</option></select></label>
 <button id="go">Load terrain</button>
+<h3>Saved places</h3><input id="pn" placeholder="Name for this place"><div class="r"><button id="ps">Save</button><button id="pd">Delete selected</button></div><select id="pl"></select>
 <h3>Environment</h3><div id="sl"></div>
 <h3>Display</h3>
 <select id="mode"><option value="0">Aerial photo + sun shading</option><option value="1">Sticky surface heat pool (B / critical)</option><option value="2">Ground heat flux</option><option value="3">Albedo</option></select>
@@ -28,9 +29,9 @@ canvas{display:block}
 <div id="hud"></div><div id="leg">tracer vertical speed: sink <i></i> lift</div><div id="st"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-const $=id=>document.getElementById(id), N=161, MAXP=50000;
-const P={wspd:5,wdir:270,sunel:50,sunaz:180,clear:.9,exag:1.3,npart:7000,tscale:8};
-const SL=[['wspd','Wind speed (m/s)',0,20,5,.5],['wdir','Wind from (°)',0,359,270,1],['sunel','Sun elevation (°)',0,80,50,1],['sunaz','Sun azimuth (°)',0,359,180,1],['clear','Clear sky / dry ground',.2,1,.9,.05],['exag','Vertical exaggeration',1,3,1.3,.1],['npart','Tracer count',1000,MAXP,7000,500],['tscale','Time speed ×',1,20,8,1]];
+const $=id=>document.getElementById(id), N=161, MAXP=300000;
+  const P={wspd:0,wdir:270,sunel:50,sunaz:180,clear:.9,exag:1.3,npart:7000,tscale:8,vzmin:.4};
+const SL=[['wspd','Wind speed (m/s)',0,20,0,.2],['wdir','Wind from (°)',0,359,270,1],['sunel','Sun elevation (°)',0,80,50,1],['sunaz','Sun azimuth (°)',0,359,180,1],['clear','Clear sky / dry ground',.2,1,.9,.05],['exag','Vertical exaggeration',1,3,1.3,.1],['npart','Tracer count',1000,MAXP,7000,1000],['vzmin','Show tracers with vz above (m/s)',-3,5,.4,.1],['tscale','Time speed ×',1,20,8,1]];
 SL.forEach(([k,l,mn,mx,v,s])=>{const d=document.createElement('div');d.innerHTML=`<label>${l}: <b id="v_${k}">${v}</b></label><input type="range" id="${k}" min="${mn}" max="${mx}" step="${s}" value="${v}">`;$('sl').appendChild(d);d.querySelector('input').oninput=e=>{P[k]=+e.target.value;$('v_'+k).textContent=P[k];onParam(k)}});
 const terr=(z,x,y)=>`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 const SRC={esri:{max:17,url:(z,x,y)=>`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`},
@@ -40,7 +41,7 @@ const st=t=>$('st').textContent=t;
 // ---------- three.js setup ----------
 const R=new THREE.WebGLRenderer({antialias:true});R.setSize(innerWidth,innerHeight);R.setPixelRatio(devicePixelRatio);document.body.prepend(R.domElement);
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x9ec5e8);
-const cam=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,10,200000);
+const cam=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,20,800000);
 const O={t:new THREE.Vector3(),d:5000,th:.6,ph:1.0};
 function updCam(){cam.position.set(O.t.x+O.d*Math.sin(O.ph)*Math.sin(O.th),O.t.y+O.d*Math.cos(O.ph),O.t.z+O.d*Math.sin(O.ph)*Math.cos(O.th));cam.lookAt(O.t)}
 addEventListener('resize',()=>{R.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
@@ -51,7 +52,7 @@ cv.onpointerup=()=>drag=null;
 cv.onpointermove=e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
  if(drag.pan){const k=O.d*.0012,fx=-Math.sin(O.th),fz=-Math.cos(O.th),rx=Math.cos(O.th),rz=-Math.sin(O.th);O.t.x+=fx*dy*k-rx*dx*k;O.t.z+=fz*dy*k-rz*dx*k}
  else{O.th-=dx*.006;O.ph=Math.min(1.55,Math.max(.05,O.ph-dy*.006))}};
-cv.onwheel=e=>{e.preventDefault();O.d=Math.min(60000,Math.max(100,O.d*Math.exp(e.deltaY*.001)))};
+cv.onwheel=e=>{e.preventDefault();O.d=Math.min(500000,Math.max(100,O.d*Math.exp(e.deltaY*.001)))};
 const sunM=new THREE.Mesh(new THREE.SphereGeometry(1,16,12),new THREE.MeshBasicMaterial({color:0xffdd44}));scene.add(sunM);
 const arrow=new THREE.ArrowHelper(new THREE.Vector3(1,0,0),new THREE.Vector3(),500,0x1144ff,100,60);scene.add(arrow);
 const pg=new THREE.BufferGeometry(),ppos=new Float32Array(MAXP*3),pcol=new Float32Array(MAXP*3);
@@ -229,11 +230,11 @@ function step(dt){
   const g=bil(G.h,px_[p],pz_[p])+3;if(py_[p]<g)py_[p]=g;pa_[p]+=dt;
   if(Math.abs(px_[p])>hs||Math.abs(pz_[p])>hs||py_[p]>top||pa_[p]>1500)spawn(p,false)}}
 function paint(){
- const n=Math.min(P.npart,MAXP),e=P.exag;
- for(let p=0;p<n;p++){const t=Math.min(1,Math.max(0,(pw_[p]+2)/6));let r,g,b;
+ const n=Math.min(P.npart,MAXP),e=P.exag;let c=0;
+ for(let p=0;p<n;p++){if(pw_[p]<P.vzmin)continue;const t=Math.min(1,Math.max(0,(pw_[p]+2)/6));let r,g,b;
   if(t<.33){const u=t/.33;r=.9*u;g=.4+.5*u;b=1-.1*u}else{const u=(t-.33)/.67;r=.9+.1*u;g=.9-.7*u;b=.9-.9*u}
-  ppos[p*3]=px_[p];ppos[p*3+1]=py_[p]*e;ppos[p*3+2]=pz_[p];pcol[p*3]=r;pcol[p*3+1]=g;pcol[p*3+2]=b}
- pg.setDrawRange(0,n);pg.attributes.position.needsUpdate=true;pg.attributes.color.needsUpdate=true}
+  ppos[c*3]=px_[p];ppos[c*3+1]=py_[p]*e;ppos[c*3+2]=pz_[p];pcol[c*3]=r;pcol[c*3+1]=g;pcol[c*3+2]=b;c++}
+ pg.setDrawRange(0,c);pg.attributes.position.needsUpdate=true;pg.attributes.color.needsUpdate=true}
 
 function placeMarkers(){
  if(!G)return;const el=P.sunel*Math.PI/180,az=P.sunaz*Math.PI/180,s=G.size*1000;
@@ -248,11 +249,18 @@ function onParam(k){
  if(k==='exag')mesh.scale.y=P.exag;
  placeMarkers()}
 $('mode').onchange=redraw;$('pt').onchange=e=>pts.visible=e.target.checked;
+const LS='thermalLabPlaces';let places=[];try{places=JSON.parse(localStorage.getItem(LS)||'[]')}catch(e){}
+const plRefresh=()=>{$('pl').innerHTML='<option value="">— load a saved place —</option>'+places.map((p,i)=>`<option value="${i}">${p.n.replace(/</g,'&lt;')} (${p.lat}, ${p.lon}, ${p.sz} km)</option>`).join('')},
+ plStore=()=>{try{localStorage.setItem(LS,JSON.stringify(places))}catch(e){st('Cannot write to localStorage')}};
+$('ps').onclick=()=>{const n=$('pn').value.trim();if(!n)return st('Enter a name first');const p={n,lat:+$('lat').value,lon:+$('lon').value,sz:+$('sz').value},i=places.findIndex(q=>q.n===n);i<0?places.push(p):places[i]=p;plStore();plRefresh();st('Saved "'+n+'"')};
+$('pl').onchange=e=>{const p=places[e.target.value];if(!p)return;$('lat').value=p.lat;$('lon').value=p.lon;$('sz').value=p.sz;$('pn').value=p.n;load().catch(er=>st('Error: '+er.message))};
+$('pd').onclick=()=>{const i=$('pl').value;if(i==='')return;places.splice(+i,1);plStore();plRefresh();st('Deleted')};
+plRefresh();
 $('go').onclick=()=>load().catch(e=>st('Error: '+e.message));
 
 let hudT=0,rdT=0;
 function loop(now){requestAnimationFrame(loop);
- if(G&&S.length){const dt=.3*P.tscale;solve(dt,6);step(dt);paint();hudT+=1;rdT+=1;
+ if(G&&S.length){const dt=.3*P.tscale*Math.min(3,Math.sqrt(G.size/4));solve(dt,6);step(dt);paint();hudT+=1;rdT+=1;
   if(hudT>12){hudT=0;maxW=0;let up=0;for(let i=0;i<NC;i++){const a=i%NX,b=(i%NXY/NX)|0,c=i/NXY|0;if(!S[i]&&W[i]>maxW&&Math.min(a,NX-1-a,b,NX-1-b,NZ-1-c)>=3)maxW=W[i]}let tot=0,ct=0;for(let i=0;i<N*N;i++)if(G.H[i]>0){tot+=Math.min(1,G.B[i]/G.Bc[i]);ct++}
    $('hud').textContent=`Mean sensible heat flux: ${G.Hm.toFixed(0)} W/m²\nPeak ground flux:   ${G.Hmax.toFixed(0)} W/m²\nBoundary layer top: ${G.zi.toFixed(0)} m AGL\nStrongest lift now: ${maxW.toFixed(1)} m/s\nSurface heat stored: ${ct?(100*tot/ct).toFixed(0):0}% of release threshold\nWind: ${P.wspd} m/s from ${P.wdir}°`}
   if(rdT>20&&$('mode').value==='1'){rdT=0;redraw()}}
