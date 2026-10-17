@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="icon-512.png">
+<meta name="theme-color" content="#1a4a8a"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Thermal Lab">
 <title>Thermal Lab – 3D thermal & terrain visualiser</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#9ec5e8;font:12px system-ui,sans-serif}
@@ -476,4 +478,5 @@ addEventListener('keydown',e=>{if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)
  try{const r=await fetch('sites.json',{cache:'no-store'});if(r.ok)j=await r.json()}catch(e){}
  let first=null;if(j){const n=addSites(j,true);st('sites.json: '+n+' site(s) loaded');if(j.default)first=places.find(p=>p.n===j.default)}
  try{first?await applySite(first):await load()}catch(e){st('Error: '+e.message)}})();
+if('serviceWorker' in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script></body></html>
