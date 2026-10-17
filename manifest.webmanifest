@@ -2,7 +2,7 @@
   "name": "Thermal Lab – 3D thermal & terrain visualiser",
   "short_name": "Thermal Lab",
   "description": "Educational 3D visualisation of thermals, wind and terrain for soaring pilots.",
-  "start_url": "./thermal-lab-v5.html",
+  "start_url": "./thermal-lab.html",
   "scope": "./",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],

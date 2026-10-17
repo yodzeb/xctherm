@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Thermal Lab – 3D thermal & terrain visualiser</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#9ec5e8;font:12px system-ui,sans-serif}
+canvas{display:block}
+#ui{position:absolute;top:8px;left:8px;width:230px;max-height:calc(100% - 16px);overflow:auto;background:rgba(15,20,30,.82);color:#e8eef5;padding:10px;border-radius:8px}
+#ui label{display:block;margin-top:6px}#ui input[type=range]{width:100%}
+#ui input,#ui select,#ui button{width:100%;box-sizing:border-box;margin-top:2px;padding:3px}
+#ui .r{display:flex;gap:4px}#ui h3{margin:8px 0 2px;font-size:12px;color:#ffc46b}
+#hud{position:absolute;right:8px;top:8px;background:rgba(15,20,30,.82);color:#e8eef5;padding:8px 10px;border-radius:8px;white-space:pre;font:11px monospace}
+#st{position:absolute;bottom:6px;left:8px;color:#123;font-size:11px}
+#leg{position:absolute;right:8px;bottom:8px;color:#fff;background:rgba(15,20,30,.82);padding:6px 8px;border-radius:8px;font-size:11px}
+#leg i{display:inline-block;width:90px;height:8px;background:linear-gradient(90deg,#0066ff,#e6e6e6,#ff3300);vertical-align:middle}
+</style></head><body>
+<div id="ui">
+<b>Thermal Lab</b>
+<h3>Zone (open data)</h3>
+<div class="r"><input id="lat" value="45.3125" title="lat"><input id="lon" value="5.8967" title="lon"></div>
+<label>Size <select id="sz"><option>2</option><option selected>4</option><option>6</option><option>8</option></select> km</label>
+<label>Imagery <select id="src"><option value="esri">Esri World Imagery</option><option value="eox">Sentinel-2 cloudless (EOX)</option></select></label>
+<button id="go">Load terrain</button>
+<h3>Environment</h3><div id="sl"></div>
+<h3>Display</h3>
+<select id="mode"><option value="0">Aerial photo + sun shading</option><option value="1">Ground heat flux</option><option value="2">Albedo</option></select>
+<label><input type="checkbox" id="pt" checked style="width:auto"> Air tracers</label>
+</div>
+<div id="hud"></div><div id="leg">tracer vertical speed: sink <i></i> lift</div><div id="st"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id), N=161, MAXP=15000;
+const P={wspd:5,wdir:270,sunel:50,sunaz:180,clear:.9,exag:1.3,npart:7000,tscale:8};
+const SL=[['wspd','Wind speed (m/s)',0,20,5,.5],['wdir','Wind from (°)',0,359,270,1],['sunel','Sun elevation (°)',0,80,50,1],['sunaz','Sun azimuth (°)',0,359,180,1],['clear','Clear sky / dry ground',.2,1,.9,.05],['exag','Vertical exaggeration',1,3,1.3,.1],['npart','Tracer count',1000,MAXP,7000,500],['tscale','Time speed ×',1,30,8,1]];
+SL.forEach(([k,l,mn,mx,v,s])=>{const d=document.createElement('div');d.innerHTML=`<label>${l}: <b id="v_${k}">${v}</b></label><input type="range" id="${k}" min="${mn}" max="${mx}" step="${s}" value="${v}">`;$('sl').appendChild(d);d.querySelector('input').oninput=e=>{P[k]=+e.target.value;$('v_'+k).textContent=P[k];onParam(k)}});
+const terr=(z,x,y)=>`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+const SRC={esri:{max:17,url:(z,x,y)=>`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`},
+ eox:{max:13,url:(z,x,y)=>`https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2021_3857/default/g/${z}/${y}/${x}.jpg`}};
+const st=t=>$('st').textContent=t;
+
+// ---------- three.js setup ----------
+const R=new THREE.WebGLRenderer({antialias:true});R.setSize(innerWidth,innerHeight);R.setPixelRatio(devicePixelRatio);document.body.prepend(R.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x9ec5e8);
+const cam=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,10,200000);
+const O={t:new THREE.Vector3(),d:5000,th:.6,ph:1.0};
+function updCam(){cam.position.set(O.t.x+O.d*Math.sin(O.ph)*Math.sin(O.th),O.t.y+O.d*Math.cos(O.ph),O.t.z+O.d*Math.sin(O.ph)*Math.cos(O.th));cam.lookAt(O.t)}
+addEventListener('resize',()=>{R.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+let drag=null;const cv=R.domElement;
+cv.oncontextmenu=e=>e.preventDefault();
+cv.onpointerdown=e=>{drag={x:e.clientX,y:e.clientY,pan:e.button>0||e.shiftKey};cv.setPointerCapture(e.pointerId)};
+cv.onpointerup=()=>drag=null;
+cv.onpointermove=e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
+ if(drag.pan){const k=O.d*.0012;O.t.x-=(dx*Math.cos(O.th)+dy*Math.sin(O.th)*0)*k;O.t.z+=(dx*Math.sin(O.th))*k;
+  O.t.x-=dy*Math.sin(O.th)*k;O.t.z-=dy*Math.cos(O.th)*k}
+ else{O.th-=dx*.006;O.ph=Math.min(1.55,Math.max(.05,O.ph-dy*.006))}};
+cv.onwheel=e=>{e.preventDefault();O.d=Math.min(60000,Math.max(100,O.d*Math.exp(e.deltaY*.001)))};
+const sunM=new THREE.Mesh(new THREE.SphereGeometry(1,16,12),new THREE.MeshBasicMaterial({color:0xffdd44}));scene.add(sunM);
+const arrow=new THREE.ArrowHelper(new THREE.Vector3(1,0,0),new THREE.Vector3(),500,0x1144ff,100,60);scene.add(arrow);
+const pg=new THREE.BufferGeometry(),ppos=new Float32Array(MAXP*3),pcol=new Float32Array(MAXP*3);
+pg.setAttribute('position',new THREE.BufferAttribute(ppos,3));pg.setAttribute('color',new THREE.BufferAttribute(pcol,3));
+const pts=new THREE.Points(pg,new THREE.PointsMaterial({size:3,sizeAttenuation:false,vertexColors:true,transparent:true,opacity:.85,depthWrite:false}));pts.frustumCulled=false;scene.add(pts);
+const tc=document.createElement('canvas');tc.width=tc.height=1024;const tx=tc.getContext('2d');const tex=new THREE.CanvasTexture(tc);tex.anisotropy=8;
+let mesh=null,G=null;
+
+// ---------- data loading ----------
+async function mosaic(urlFn,z,lat,lon,half){
+ const n=256*2**z,a=lat*Math.PI/180,px=(lon+180)/360*n,py=(1-Math.log(Math.tan(a)+1/Math.cos(a))/Math.PI)/2*n,hp=half/(156543.03*Math.cos(a)/2**z);
+ const x0=px-hp,y0=py-hp,tx0=Math.floor(x0/256),ty0=Math.floor(y0/256),tx1=Math.floor((px+hp)/256),ty1=Math.floor((py+hp)/256);
+ const c=document.createElement('canvas');c.width=(tx1-tx0+1)*256;c.height=(ty1-ty0+1)*256;const g=c.getContext('2d',{willReadFrequently:true});
+ let ok=0;const jobs=[];
+ for(let ty=ty0;ty<=ty1;ty++)for(let tx=tx0;tx<=tx1;tx++)jobs.push(new Promise(r=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>{g.drawImage(im,(tx-tx0)*256,(ty-ty0)*256);ok++;r()};im.onerror=r;im.src=urlFn(z,tx,ty)}));
+ await Promise.all(jobs);return{c,g,ox:x0-tx0*256,oy:y0-ty0*256,w:2*hp,ok,tot:jobs.length};
+}
+async function load(){
+ const lat=+$('lat').value,lon=+$('lon').value,size=+$('sz').value,half=size*500,cell=size*1000/(N-1),co=Math.cos(lat*Math.PI/180),src=SRC[$('src').value];
+ const ze=Math.min(14,Math.max(8,Math.ceil(Math.log2(156543*co/cell))));let zi=Math.min(src.max,ze+2);
+ const cnt=z=>(Math.ceil(2*half/(156543*co/2**z)/256)+1)**2;while(zi>8&&cnt(zi)>30)zi--;
+ st('Downloading elevation + imagery tiles…');
+ const [E,I]=await Promise.all([mosaic(terr,ze,lat,lon,half),mosaic(src.url,zi,lat,lon,half)]);
+ const h=new Float32Array(N*N);
+ if(E.ok===E.tot){
+  const W=E.c.width,d=E.g.getImageData(0,0,W,E.c.height).data,e=(x,y)=>{const o=(y*W+x)*4;return d[o]*256+d[o+1]+d[o+2]/256-32768};
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){const fx=Math.min(W-2,E.ox+i/(N-1)*E.w),fy=Math.min(E.c.height-2,E.oy+j/(N-1)*E.w),x=fx|0,y=fy|0,u=fx-x,v=fy-y;
+   h[j*N+i]=(e(x,y)*(1-u)+e(x+1,y)*u)*(1-v)+(e(x,y+1)*(1-u)+e(x+1,y+1)*u)*v}
+  st('Elevation OK ('+E.tot+' tiles, z'+ze+'). Imagery '+I.ok+'/'+I.tot+' tiles z'+zi+'.');
+ }else{for(let j=0;j<N;j++)for(let i=0;i<N;i++)h[j*N+i]=900+250*Math.sin(i/22)*Math.cos(j/30)+400*Math.exp(-((i-110)**2+(j-60)**2)/1500);
+  st('⚠ Elevation download failed (offline / blocked?) – showing synthetic terrain.');}
+ const ic=document.createElement('canvas');ic.width=ic.height=1024;const ig=ic.getContext('2d');ig.fillStyle='#777';ig.fillRect(0,0,1024,1024);
+ if(I.ok)ig.drawImage(I.c,I.ox,I.oy,I.w,I.w,0,0,1024,1024);
+ const sc=document.createElement('canvas');sc.width=sc.height=N;const sg=sc.getContext('2d');sg.drawImage(ic,0,0,N,N);
+ let px;try{px=sg.getImageData(0,0,N,N).data}catch(e){px=new Uint8ClampedArray(N*N*4).fill(120);st('Imagery canvas tainted: default albedo used.')}
+ const alb=new Float32Array(N*N),fs=new Float32Array(N*N);
+ for(let k=0;k<N*N;k++){const r=px[k*4],g=px[k*4+1],b=px[k*4+2],L=(.3*r+.59*g+.11*b)/255;
+  const veg=g>r*1.03&&g>b*1.05,wat=b>r&&b>g*.95&&L<.35;
+  alb[k]=wat?.06:Math.min(.8,Math.max(.05,.04+.5*Math.pow(L,1.3)));
+  fs[k]=wat?.03:veg?.30:.55}   // fraction of net radiation going to sensible heat
+ const gx=new Float32Array(N*N),gz=new Float32Array(N*N);
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){const a=Math.max(0,i-1),b=Math.min(N-1,i+1),c=Math.max(0,j-1),d=Math.min(N-1,j+1);
+  gx[j*N+i]=(h[j*N+b]-h[j*N+a])/((b-a)*cell);gz[j*N+i]=(h[d*N+i]-h[c*N+i])/((d-c)*cell)}
+ G={N,size,cell,h,alb,fs,gx,gz,H:new Float32Array(N*N),Hs:new Float32Array(N*N),L:new Float32Array(N*N),cum:new Float32Array(N*N),ic,ac:albCanvas(alb),zi:0,Wst:0,Hm:1,Hmax:1};
+ if(mesh){scene.remove(mesh);mesh.geometry.dispose()}
+ const geo=new THREE.PlaneGeometry(size*1000,size*1000,N-1,N-1);geo.rotateX(-Math.PI/2);
+ const pa=geo.attributes.position;for(let k=0;k<N*N;k++)pa.setY(k,h[k]);geo.computeVertexNormals();
+ mesh=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({map:tex}));mesh.scale.y=P.exag;scene.add(mesh);
+ let m=0;for(const v of h)m+=v;m/=h.length;G.mean=m;O.t.set(0,m*P.exag,0);O.d=size*1000*.9;
+ compute();for(let p=0;p<MAXP;p++)spawn(p,true);placeMarkers();
+}
+function albCanvas(a){const c=document.createElement('canvas');c.width=c.height=N;const g=c.getContext('2d'),d=g.createImageData(N,N);
+ for(let k=0;k<N*N;k++){const v=Math.min(255,a[k]*400);d.data.set([v,v,v,255],k*4)}g.putImageData(d,0,0);return c}
+
+// ---------- thermal physics (simplified) ----------
+function blur(a,r){const t=new Float32Array(N*N),o=new Float32Array(N*N);
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){let s=0,c=0;for(let k=Math.max(0,i-r);k<=Math.min(N-1,i+r);k++){s+=a[j*N+k];c++}t[j*N+i]=s/c}
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){let s=0,c=0;for(let k=Math.max(0,j-r);k<=Math.min(N-1,j+r);k++){s+=t[k*N+i];c++}o[j*N+i]=s/c}return o}
+function compute(){
+ if(!G)return;const{h,cell,alb,fs,gx,gz,H,L}=G,el=P.sunel*Math.PI/180,az=P.sunaz*Math.PI/180;
+ const sx=Math.sin(az)*Math.cos(el),sy=Math.sin(el),sz=-Math.cos(az)*Math.cos(el),hl=Math.hypot(sx,sz)||1,dx=sx/hl,dz=sz/hl,tn=Math.tan(el),day=el>.01;
+ let sum=0,mx=0;
+ for(let j=0;j<N;j++)for(let i=0;i<N;i++){const id=j*N+i;let cosI=0;
+  if(day){const ln=Math.hypot(gx[id],gz[id],1);cosI=Math.max(0,(-gx[id]*sx+sy-gz[id]*sz)/ln);
+   if(cosI>0)for(let k=1;k<90;k++){const ii=Math.round(i+dx*k),jj=Math.round(j+dz*k);if(ii<0||jj<0||ii>=N||jj>=N)break;if(h[jj*N+ii]>h[id]+k*cell*tn){cosI=0;break}}}
+  L[id]=.38+.62*Math.min(1,cosI/Math.max(.3,sy));
+  const Rn=day?(1-alb[id])*(1000*P.clear*cosI+120*sy*P.clear)*.8:0;H[id]=Rn*fs[id];sum+=H[id];if(H[id]>mx)mx=H[id]}
+ G.Hm=Math.max(1,sum/(N*N));G.Hmax=Math.max(1,mx);G.Hs=blur(blur(H,Math.max(1,Math.round(150/cell))),1);
+ let c=0;for(let k=0;k<N*N;k++){c+=Math.max(0,G.Hs[k])+.5;G.cum[k]=c}
+ G.zi=day?150+35*P.sunel*P.clear:0;G.Wst=Math.cbrt(9.81/290*G.Hm/1200*G.zi);
+ redraw();
+}
+function redraw(){
+ if(!G)return;const m=+$('mode').value,{L,H}=G;
+ const lc=document.createElement('canvas');lc.width=lc.height=N;const lg=lc.getContext('2d'),ld=lg.createImageData(N,N);
+ for(let k=0;k<N*N;k++){const v=L[k]*255;ld.data.set([v,v,v,255],k*4)}lg.putImageData(ld,0,0);
+ tx.imageSmoothingEnabled=true;tx.globalCompositeOperation='source-over';tx.globalAlpha=1;
+ if(m===0)tx.drawImage(G.ic,0,0);
+ else if(m===2)tx.drawImage(G.ac,0,0,1024,1024);
+ else{const hc=document.createElement('canvas');hc.width=hc.height=N;const hg=hc.getContext('2d'),hd=hg.createImageData(N,N);
+  for(let k=0;k<N*N;k++){const v=H[k]/G.Hmax;hd.data.set([255*Math.min(1,v*1.8),255*Math.min(1,Math.max(0,v*1.8-.6)),255*Math.min(.6,Math.max(0,.55-v)),255],k*4)}hg.putImageData(hd,0,0);tx.drawImage(hc,0,0,1024,1024)}
+ tx.globalCompositeOperation='multiply';tx.globalAlpha=m===1?.45:1;tx.drawImage(lc,0,0,1024,1024);tx.globalCompositeOperation='source-over';tx.globalAlpha=1;
+ tex.needsUpdate=true;
+}
+const bil=(a,x,z)=>{const s=G.size,f=(v)=>Math.min(N-1.001,Math.max(0,(v/s+.5)*(N-1))),fx=f(x),fz=f(z),i=fx|0,j=fz|0,u=fx-i,v=fz-j;
+ return(a[j*N+i]*(1-u)+a[j*N+i+1]*u)*(1-v)+(a[(j+1)*N+i]*(1-u)+a[(j+1)*N+i+1]*u)*v};
+const wind=()=>{const d=P.wdir*Math.PI/180;return[-P.wspd*Math.sin(d),P.wspd*Math.cos(d)]};
+
+// ---------- tracers ----------
+const px_=new Float32Array(MAXP),py_=new Float32Array(MAXP),pz_=new Float32Array(MAXP),pa_=new Float32Array(MAXP),pw_=new Float32Array(MAXP);
+function spawn(p,init){
+ const s=G.size*1000;let x,z,y;
+ if(Math.random()<.7){const r=Math.random()*G.cum[N*N-1];let lo=0,hi=N*N-1;while(lo<hi){const m=(lo+hi)>>1;G.cum[m]<r?lo=m+1:hi=m}
+  x=((lo%N)/(N-1)-.5)*s+(Math.random()-.5)*G.cell;z=((lo/N|0)/(N-1)-.5)*s+(Math.random()-.5)*G.cell;y=bil(G.h,x,z)+2+Math.random()*10}
+ else{x=(Math.random()-.5)*s*.98;z=(Math.random()-.5)*s*.98;y=bil(G.h,x,z)+20+Math.random()*Math.max(50,G.zi)*.8}
+ px_[p]=x;pz_[p]=z;py_[p]=y;pa_[p]=init?Math.random()*400:0}
+function step(dt){
+ if(!G)return;const[ux,uz]=wind(),n=Math.min(P.npart,MAXP),s=G.size*1000,zi=Math.max(50,G.zi),Wc=Math.max(1,G.Wst*.7);
+ for(let p=0;p<n;p++){
+  const x=px_[p],z=pz_[p],gh=bil(G.h,x,z),agl=Math.max(0,py_[p]-gh),fr=.55+.45*Math.min(1,agl/400);
+  const ox=ux*fr*agl/Wc*.5,oz=uz*fr*agl/Wc*.5,a0=bil(G.Hs,x-ox,z-oz)/G.Hm-1,a=a0<0?a0*.4:Math.min(2.5,a0),sf=agl/zi;
+  const prof=sf<1?Math.cbrt(sf)*(1-1.1*sf):0;
+  let oro=(ux*bil(G.gx,x,z)+uz*bil(G.gz,x,z))*Math.exp(-agl/250);oro=Math.max(-6,Math.min(6,oro));
+  const w=G.Wst*a*prof+oro+(Math.random()-.5)*.6;pw_[p]=w;
+  px_[p]=x+(ux*fr+(Math.random()-.5)*.8)*dt;pz_[p]=z+(uz*fr+(Math.random()-.5)*.8)*dt;py_[p]+=w*dt;
+  const g2=bil(G.h,px_[p],pz_[p])+3;if(py_[p]<g2)py_[p]=g2;pa_[p]+=dt;
+  if(Math.abs(px_[p])>s/2||Math.abs(pz_[p])>s/2||agl>zi*1.15+100||pa_[p]>600)spawn(p,false)}
+}
+function paint(){
+ const n=Math.min(P.npart,MAXP),e=P.exag;
+ for(let p=0;p<n;p++){const t=Math.min(1,Math.max(0,(pw_[p]+2)/6));let r,g,b;
+  if(t<.33){const u=t/.33;r=.0+.9*u;g=.4+.5*u;b=1-.1*u}else{const u=(t-.33)/.67;r=.9+.1*u;g=.9-.7*u;b=.9-.9*u}
+  ppos[p*3]=px_[p];ppos[p*3+1]=py_[p]*e;ppos[p*3+2]=pz_[p];pcol[p*3]=r;pcol[p*3+1]=g;pcol[p*3+2]=b}
+ pg.setDrawRange(0,n);pg.attributes.position.needsUpdate=true;pg.attributes.color.needsUpdate=true}
+
+function placeMarkers(){
+ if(!G)return;const el=P.sunel*Math.PI/180,az=P.sunaz*Math.PI/180,s=G.size*1000;
+ sunM.scale.setScalar(s*.03);sunM.visible=P.sunel>0;
+ sunM.position.set(O.t.x+Math.sin(az)*Math.cos(el)*s*1.1,O.t.y+Math.sin(el)*s*1.1,O.t.z-Math.cos(az)*Math.cos(el)*s*1.1);
+ const[ux,uz]=wind(),l=Math.hypot(ux,uz);arrow.visible=l>.01;
+ if(l>.01){arrow.setDirection(new THREE.Vector3(ux/l,0,uz/l));arrow.setLength(s*.1+s*.01*P.wspd,s*.03,s*.02)}
+ arrow.position.set(-s*.35*ux/(l||1),(G.mean+600)*P.exag,-s*.35*uz/(l||1))}
+function onParam(k){
+ if(!G)return;
+ if(['sunel','sunaz','clear'].includes(k))compute();
+ if(k==='exag')mesh.scale.y=P.exag;
+ placeMarkers()}
+$('mode').onchange=redraw;$('pt').onchange=e=>pts.visible=e.target.checked;
+$('go').onclick=()=>load().catch(e=>st('Error: '+e.message));
+
+let last=performance.now(),hudT=0;
+function loop(now){requestAnimationFrame(loop);const dt=Math.min(.05,(now-last)/1000);last=now;
+ if(G){step(dt*P.tscale);paint();hudT+=dt;if(hudT>.4){hudT=0;
+  $('hud').textContent=`Mean sensible heat flux: ${G.Hm.toFixed(0)} W/m²\nPeak ground flux:  ${G.Hmax.toFixed(0)} W/m²\nBoundary layer top: ${G.zi.toFixed(0)} m AGL\nThermal scale w*:   ${G.Wst.toFixed(1)} m/s\nWind: ${P.wspd} m/s from ${P.wdir}°`}}
+ updCam();R.render(scene,cam)}
+requestAnimationFrame(loop);updCam();
+load().catch(e=>st('Error: '+e.message));
+</script></body></html>
