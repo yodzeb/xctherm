@@ -1,0 +1,15 @@
+{
+  "name": "Thermal Lab – 3D thermal & terrain visualiser",
+  "short_name": "Thermal Lab",
+  "description": "Educational 3D visualisation of thermals, wind and terrain for soaring pilots.",
+  "start_url": "./thermal-lab-v5.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "background_color": "#1a4a8a",
+  "theme_color": "#1a4a8a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
